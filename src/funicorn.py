@@ -1,0 +1,234 @@
+''' Notes on multiprocessing in python 
+'''
+import os
+import multiprocessing
+import threading
+from collections import namedtuple
+import uuid
+import time
+from api import Api
+from exceptions import LengthEqualtyError
+from queue import Empty
+
+RESULT_TIMEOUT = 0.001
+DEFAULT_TIMEOUT = 500
+WORKER_TIMEOUT = 20
+DEFAULT_BATCH_TIMEOUT = 0.01
+
+mp = multiprocessing.get_context("spawn")
+
+Task = namedtuple('Task', ['request_id', 'data'])
+
+
+class Model():
+    def predict(self, data):
+        print('Model', data)
+        return data
+
+
+class BaseWorker():
+    def __init__(self, model_cls, input_queue=None, result_dict=None,
+                 batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT, ready_event=None, destroy_event=None):
+        self._model_cls = model_cls
+        self._input_queue = input_queue
+        self._result_dict = result_dict
+        self.batch_size = batch_size
+        self.batch_timeout = batch_timeout
+        self._ready_event = ready_event
+        self._destroy_event = destroy_event
+        self._pid = os.getpid()
+        self._model = None
+
+    def _recv_request(self):
+        raise NotImplementedError
+
+    def _send_response(self, request_id, result):
+        raise NotImplementedError
+
+    def run_once(self):
+        # Get data from queue
+        batch = []
+        for i in range(self.batch_size):
+            try:
+                task = self._recv_request()
+            except TimeoutError:
+                break
+            else:
+                batch.append(task)
+        if not batch:
+            return 0
+
+        batch_size = len(batch)
+        model_input = [task.data for task in batch]
+
+        # Model predict
+        results = self._model.predict(model_input)
+
+        assert len(results) == len(batch), LengthEqualtyError(
+            'Length of result and batch must be equal')
+        for (task, result) in zip(batch, results):
+            self._send_response(task.request_id, result)
+
+        # Return None or something to notify number of data in queue
+        return batch_size
+
+    def run(self):
+        '''Loop into a queue'''
+        while True:
+            handled = self.run_once()
+            if self._destroy_event and self._destroy_event.is_set():
+                break
+            if not handled:
+                time.sleep(RESULT_TIMEOUT)
+
+
+class Worker(BaseWorker):
+
+    def _recv_request(self):
+        try:
+            task = self._input_queue.get(timeout=self.batch_timeout)
+        except Empty:
+            raise TimeoutError
+        else:
+            return task
+
+    def _send_response(self, request_id, result):
+        self._result_dict[request_id] = result
+
+    def run(self, ready_event=None, destroy_event=None):
+        ''' Init process parameters
+            Every param initialized here are seperable among processes
+        '''
+        self._pid = os.getpid()
+
+        self._model = self._model_cls()
+        if ready_event:
+            ready_event.set()  # tell father process that init is finished
+        if destroy_event:
+            self._destroy_event = destroy_event
+
+        # Run in loop
+        super().run()
+
+
+class Stat():
+    def __init__(self, num_workers):
+        self.statistics_info = {
+            'start_time': time.time(),
+            'num_req': 0,
+            'num_res': 0,
+            'avg_latency': 0,
+            'avg_req_per_sec': 0,
+            'avg_res_per_sec': 0,
+            'crashes': 0,
+            'num_workers': num_workers
+        }
+        self.lock = threading.Lock()
+
+    def __getitem__(self, attr):
+        return self.statistics_info[attr]
+
+    def __setitem__(self, attr, value):
+        with self.lock:
+            self.statistics_info[attr] = value
+
+    def __repr__(self):
+        print(self.statistics_info)
+        
+    def increment(self, name, value=1):
+        with self.lock:
+            self.statistics_info[name] += value
+
+    def decrement(self, name, value=1):
+        with self.lock:
+            self.statistics_info[name] -= value
+
+    def average(self, name, value):
+        with self.lock:
+            n_req = self.statistics_info['num_req']
+            self.statistics_info[name] += value
+            self.statistics_info[name] /= n_req
+
+    @property
+    def info(self):
+        return self.statistics_info
+
+class Funicorn():
+    def __init__(self, model_cls, num_workers=1, batch_size=1,
+                 http_host='localhost', http_port=5000):
+        self.http_host = http_host
+        self.http_port = http_port
+        self.num_workers = num_workers
+        self._init_http_server()
+        self._input_queue = mp.Queue()
+        self._result_dict = mp.Manager().dict()
+        self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
+                           batch_size=batch_size)
+        self.wrk_ps = []
+        self.wrk_ready_events = []
+        self.wrk_destroy_events = []
+        self._init_all_workers()
+        self._wait_for_worker_ready()
+
+    def _init_http_server(self):
+        self.stat = Stat(num_workers=self.num_workers)
+        self._restful = Api(funicorn=self, host=self.http_host,
+                            port=self.http_port, stat=self.stat)
+        self._restful.daemon = True
+        self._restful.start()
+
+    def _init_all_workers(self):
+        for _ in range(self.num_workers):
+            ready_event = mp.Event()
+            destroy_event = mp.Event()
+            args = (ready_event, destroy_event)
+            wrk = mp.Process(target=self._wrk.run, args=args, daemon=True,
+                             name='binding')
+            wrk.start()
+            self.wrk_ps.append(wrk)
+            self.wrk_ready_events.append(ready_event)
+            self.wrk_destroy_events.append(destroy_event)
+
+    def _wait_for_worker_ready(self, timeout=WORKER_TIMEOUT):
+        # wait for all workers finishing init
+        for (i, e) in enumerate(self.wrk_ready_events):
+            # todo: select all events with timeout
+            is_ready = e.wait(timeout)
+            print("gpu worker:%d ready state: %s" % (i, is_ready))
+
+    def predict(self, data, timeout=DEFAULT_TIMEOUT, asynchronous=False):
+        request_id = str(uuid.uuid4())
+        self._input_queue.put(Task(request_id=request_id, data=data))
+        if asynchronous:
+            return request_id
+        else:
+            return self.get_result(request_id, timeout=timeout)
+
+    def get_result(self, request_id, timeout=DEFAULT_TIMEOUT):
+        ret = None
+        start_time = time.time()
+        while True:
+            ret = self._result_dict.get(request_id, None)
+            if ret is not None:
+                break
+            if time.time() - start_time > timeout:
+                break
+            time.sleep(RESULT_TIMEOUT)
+        return ret
+
+    def destroy_all_worker(self):
+        '''Destroy all workers'''
+        pass
+
+    def check_all_worker(self):
+        '''Check status of all workers. Restart them if necessary'''
+        pass
+
+    def serve(self):
+        while True:
+            time.sleep(300)
+
+
+if __name__ == "__main__":
+    binding = Funicorn(Model, num_workers=3, batch_size=2)
+    binding.serve()
