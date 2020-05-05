@@ -51,7 +51,7 @@ class FunicornModel():
 class BaseWorker():
     def __init__(self, model_cls, input_queue=None, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, destroy_event=None, model_init_args=None, model_init_kwargs=None):
+                 ready_event=None, destroy_event=None, model_init_args=None, model_init_kwargs=None, debug=False):
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
@@ -63,7 +63,7 @@ class BaseWorker():
         self._destroy_event = destroy_event
         self._pid = os.getpid()
         self._model = None
-        self._logger = get_logger()
+        self._logger = get_logger(mode='debug' if debug else 'info')
 
     def _recv_request(self):
         raise NotImplementedError
@@ -133,9 +133,8 @@ class Worker(BaseWorker):
         '''
         self._pid = os.getpid()
         self._setup_gpu_device(gpu_id)
-        self._model = self._model_cls(gpu_id,
-                                      self._model_init_args,
-                                      self._model_init_kwargs)
+        self._model = self._model_cls(*self._model_init_args,
+                                      **self._model_init_kwargs)
         if ready_event:
             ready_event.set()  # tell father process that init is finished
         if destroy_event:
@@ -149,6 +148,8 @@ class Funicorn():
     def __init__(self, model_cls, num_workers=1, batch_size=1,
                  http_host='localhost', http_port=5000, gpu_devices=None,
                  model_init_args=None, model_init_kwargs=None):
+
+        self._logger = get_logger()
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self.http_host = http_host
@@ -208,17 +209,19 @@ class Funicorn():
         for (i, e) in enumerate(self.wrk_ready_events):
             # todo: select all events with timeout
             is_ready = e.wait(timeout)
-            print("gpu worker:%d ready state: %s" % (i, is_ready))
+            self._logger.info("gpu worker:%d ready state: %s" % (i, is_ready))
 
     def predict(self, data, timeout=DEFAULT_TIMEOUT, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
+        self._logger.debug(f'Receive data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
             return self.get_result(request_id, timeout=timeout)
 
     def get_result(self, request_id, timeout=DEFAULT_TIMEOUT):
+        self._logger.debug(f'Wait for result with request_id: {request_id}')
         ret = None
         start_time = time.time()
         while True:
@@ -246,5 +249,5 @@ class Funicorn():
 
 if __name__ == "__main__":
     binding = Funicorn(FunicornModel, num_workers=3,
-                       batch_size=2, model_init_args=['model_path'])
+                       batch_size=2, model_init_args=['model_path'], model_init_kwargs={'model_path': '/data/ckpt.ckpt'})
     binding.serve()
