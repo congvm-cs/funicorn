@@ -1,6 +1,30 @@
-import threading
-import multiprocessing
 import time
+import multiprocessing
+import threading
+import psutil
+
+# cvt_status = lambda is_alive: 'alive' if is_alive == 'running' else 'dead'
+
+# def check_ps_status(parent_pid, including_parent=True):
+#     status = {}
+#     parent = psutil.Process(parent_pid)
+#     for idx, child in enumerate(parent.children(recursive=True)):
+#         status[f'child-{idx}'] = {'pid': child.pid, 'status': child.status()}
+#     if including_parent:
+#         status['parent'] = {'pid': parent.pid, 'status': parent.status()}
+#     return status
+
+
+def check_all_ps_status(list_pid):
+    status = {}
+    for pid in list_pid:
+        status[pid] = check_ps_status(pid)
+    return status
+
+
+def check_ps_status(pid):
+    ps = psutil.Process(pid)
+    return ps.status()
 
 
 def get_logger(name='logger', mode='debug'):
@@ -20,7 +44,6 @@ if __name__ == '__main__':
         logger = get_logger('worker-1', mode='debug')
         logger.info('This is a logger for debugging.')
         logger.debug('This is a logger for debugging.')
-
 
     print('Starting')
     for _ in range(5):

@@ -10,7 +10,7 @@ import time
 from queue import Empty
 from .api import Api
 from .exceptions import LengthEqualtyError
-from .logger import get_logger
+from .utils import get_logger
 from .stat import Statistic
 
 RESULT_TIMEOUT = 0.001
@@ -24,6 +24,8 @@ Task = namedtuple('Task', ['request_id', 'data'])
 
 
 class FunicornModel():
+    '''Experimental'''
+
     def __init__(self, gpu_id, *args, **kwargs):
         self._gpu_id = gpu_id
         self.init_gpu_devices()
@@ -68,6 +70,10 @@ class BaseWorker():
 
     def _send_response(self, request_id, result):
         raise NotImplementedError
+
+    def _setup_gpu_device(self, gpu_id):
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     def run_once(self):
         # Get data from queue
@@ -126,8 +132,10 @@ class Worker(BaseWorker):
             Every param initialized here are seperable among processes
         '''
         self._pid = os.getpid()
-        self._model = self._model_cls(
-            gpu_id, self._model_init_args, self._model_init_kwargs)
+        self._setup_gpu_device(gpu_id)
+        self._model = self._model_cls(gpu_id,
+                                      self._model_init_args,
+                                      self._model_init_kwargs)
         if ready_event:
             ready_event.set()  # tell father process that init is finished
         if destroy_event:
@@ -147,7 +155,7 @@ class Funicorn():
         self.http_port = http_port
         self.gpu_devices = gpu_devices  # TODO
         self.num_workers = num_workers
-        
+
         self._input_queue = mp.Queue()
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
@@ -163,6 +171,9 @@ class Funicorn():
         self._init_all_workers()
         self._wait_for_worker_ready()
 
+    def get_worker_pids(self):
+        return [wrk.pid for wrk in self.wrk_ps]
+
     def _init_stat(self):
         self.stat = Statistic(num_workers=self.num_workers)
         self.stat.update({'parent_pid': self.pid})
@@ -174,21 +185,20 @@ class Funicorn():
         self._restful.start()
 
     def _init_all_workers(self):
-        for i in range(self.num_workers):
+        for idx in range(self.num_workers):
             ready_event = mp.Event()
             destroy_event = mp.Event()
             args = (ready_event, destroy_event)
 
             if self.gpu_devices is not None:
-                gpu_id = self.gpu_devices[i % len(self.gpu_devices)]
+                gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
             else:
-                gpu_id = None
+                gpu_id = -1
             args = (gpu_id, ready_event, destroy_event)
             wrk = mp.Process(target=self._wrk.run, args=args,
                              daemon=True,
-                             name='funicorn-worker')
+                             name=f'funicorn-worker-{idx}')
             wrk.start()
-            # wrk.join()
             self.wrk_ps.append(wrk)
             self.wrk_ready_events.append(ready_event)
             self.wrk_destroy_events.append(destroy_event)
@@ -232,8 +242,6 @@ class Funicorn():
     def serve(self):
         while True:
             time.sleep(300)
-        # for wrk in self.wrk_ps:
-        #     wrk.join()
 
 
 if __name__ == "__main__":

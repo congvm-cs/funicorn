@@ -1,21 +1,16 @@
-# from src import ModelManager
-# from src import Funicorn
-# from service_streamer import ManagedModel, Streamer
-from src import Funicorn, FunicornModel
+from funicorn import Funicorn
+import os
 
-class TestModel(FunicornModel):
-    def init_model(self, *args, **kwargs):
-        print('init testmodel')
-        # raise ValueError('fake bug')
+
+class TestModel():
+    def __init__(self, *args, **kwargs):
+        print('CUDA_VISIBLE_DEVICES: ', os.getenv('CUDA_VISIBLE_DEVICES'))
 
     def predict(self, batch):
         return batch
 
 
 if __name__ == '__main__':
-#     funicorn = Funicorn(model_cls=TestModel, batch_size=3, batch_timeout=1000,
-#                     model_args=('model_path', ), num_workers=2, cuda_devices=[1, 1])
-#     funicorn.serve()
-    streamer = Funicorn(TestModel, num_workers=3)
-    print(streamer.predict(10))
-    streamer.serve()
+    funicorn = Funicorn(TestModel, num_workers=3, gpu_devices=[1, 2, 3, 4, 5])
+    print(funicorn.predict(10))
+    funicorn.serve()
