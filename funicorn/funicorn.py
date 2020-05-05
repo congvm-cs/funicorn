@@ -20,6 +20,7 @@ DEFAULT_BATCH_TIMEOUT = 0.01
 
 # mp = multiprocessing.get_context("spawn") # Error on Server
 
+__all__ = ['FunicornModel', 'Funicorn']
 Task = namedtuple('Task', ['request_id', 'data'])
 
 
@@ -78,7 +79,7 @@ class BaseWorker():
     def run_once(self):
         # Get data from queue
         batch = []
-        for i in range(self.batch_size):
+        for idx in range(self.batch_size):
             try:
                 task = self._recv_request()
             except TimeoutError:
@@ -93,7 +94,8 @@ class BaseWorker():
 
         # Model predict
         results = self._model.predict(model_input)
-
+        assert isinstance(results, list), ValueError(
+            '`results` must be a list')
         assert len(results) == len(batch), LengthEqualtyError(
             'Length of result and batch must be equal')
         for (task, result) in zip(batch, results):
@@ -133,6 +135,7 @@ class Worker(BaseWorker):
         '''
         self._pid = os.getpid()
         self._setup_gpu_device(gpu_id)
+        self._model_init_kwargs.update({'gpu_id': gpu_id})
         self._model = self._model_cls(*self._model_init_args,
                                       **self._model_init_kwargs)
         if ready_event:
@@ -145,11 +148,11 @@ class Worker(BaseWorker):
 
 
 class Funicorn():
-    def __init__(self, model_cls, num_workers=1, batch_size=1,
+    def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
                  http_host='localhost', http_port=5000, gpu_devices=None,
                  model_init_args=None, model_init_kwargs=None):
 
-        self._logger = get_logger()
+        self._logger = get_logger(mode='info')
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self.http_host = http_host
@@ -160,7 +163,7 @@ class Funicorn():
         self._input_queue = mp.Queue()
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
-                           batch_size=batch_size,
+                           batch_size=batch_size, batch_timeout=batch_timeout,
                            model_init_args=model_init_args, model_init_kwargs=model_init_kwargs)
         self.pid = os.getpid()
         self._init_stat()

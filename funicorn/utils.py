@@ -2,17 +2,19 @@ import time
 import multiprocessing
 import threading
 import psutil
+import logging
 
 # cvt_status = lambda is_alive: 'alive' if is_alive == 'running' else 'dead'
 
-# def check_ps_status(parent_pid, including_parent=True):
-#     status = {}
-#     parent = psutil.Process(parent_pid)
-#     for idx, child in enumerate(parent.children(recursive=True)):
-#         status[f'child-{idx}'] = {'pid': child.pid, 'status': child.status()}
-#     if including_parent:
-#         status['parent'] = {'pid': parent.pid, 'status': parent.status()}
-#     return status
+
+def check_tree_status(parent_pid, including_parent=True):
+    status = {}
+    parent = psutil.Process(parent_pid)
+    for idx, child in enumerate(parent.children(recursive=True)):
+        status[f'child-{idx}'] = {'pid': child.pid, 'status': child.status()}
+    if including_parent:
+        status['parent'] = {'pid': parent.pid, 'status': parent.status()}
+    return status
 
 
 def check_all_ps_status(list_pid):
@@ -26,16 +28,18 @@ def check_ps_status(pid):
     ps = psutil.Process(pid)
     return ps.status()
 
+# https://stackoverflow.com/questions/17745914/python-logging-module-is-printing-lines-multiple-times
+
 
 def get_logger(name='logger', mode='debug'):
-    import logging
     logger = logging.getLogger(name)
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(filename)s-%(funcName)s-%(lineno)04d | %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG if mode == 'debug' else logging.INFO)
+    if not logger.hasHandlers():
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(filename)s-%(funcName)s-%(lineno)04d | %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG if mode == 'debug' else logging.INFO)
     return logger
 
 

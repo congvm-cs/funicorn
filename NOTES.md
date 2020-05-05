@@ -1,3 +1,4 @@
+## Worker
 [ x ] add batch aggregation
 [ x ] add logger for funicorn
 [ - ] add logger for funicorn workers (multiprocess)
