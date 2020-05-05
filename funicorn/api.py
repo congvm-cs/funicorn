@@ -1,15 +1,18 @@
 from flask import Flask, request, abort, jsonify
 from waitress import serve
 import threading
-from exceptions import NotSupportedInputFile, MaxFileSizeExeeded
 from PIL import Image
 import numpy as np
 import time
 from collections import namedtuple
+from http import HTTPStatus
+from .utils import check_all_ps_status
+from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded
+from .utils import get_logger
 
 
 class Api(threading.Thread):
-    def __init__(self, funicorn, host, port, stat=None, threads=10, timeout=1000):
+    def __init__(self, funicorn, host, port, stat=None, threads=30, timeout=1000, debug=False):
         threading.Thread.__init__(self)
         self.host = host
         self.port = port
@@ -18,6 +21,7 @@ class Api(threading.Thread):
         self.app = self.create_restful()
         self.funicorn = funicorn
         self.stat = stat
+        self._logger = get_logger(mode='debug' if debug else 'info')
 
     def create_restful(self):
         app = Flask(__name__)
@@ -36,34 +40,44 @@ class Api(threading.Thread):
                 raise NotSupportedInputFile(
                     "Wrong input file type, only accept image")
 
-        @app.errorhandler(413)
+        @app.errorhandler(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
         def max_file_size_exeeded(error):
             resp = jsonify({
-                "error_code": 413,
+                "error_code": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 "error_message": 'Request Size Exeeded',
                 "data": []
             })
-            resp.status_code = 413
+            resp.status_code = HTTPStatus.REQUEST_ENTITY_TOO_LARGE
             return resp
 
-        @app.errorhandler(400)
+        @app.errorhandler(HTTPStatus.NOT_FOUND)
         def wrong_request_params(error):
             resp = jsonify({
-                "error_code": 400,
+                "error_code": HTTPStatus.NOT_FOUND,
+                "error_message": "Api Not Found",
+                "data": []
+            })
+            resp.status_code = HTTPStatus.NOT_FOUND
+            return resp
+
+        @app.errorhandler(HTTPStatus.BAD_REQUEST)
+        def wrong_request_params(error):
+            resp = jsonify({
+                "error_code": HTTPStatus.BAD_REQUEST,
                 "error_message": "Wrong request parameter",
                 "data": []
             })
-            resp.status_code = 400
+            resp.status_code = HTTPStatus.BAD_REQUEST
             return resp
 
-        @app.errorhandler(500)
+        @app.errorhandler(HTTPStatus.INTERNAL_SERVER_ERROR)
         def internal_server_error(error):
             resp = jsonify({
-                "error_code": 500,
+                "error_code": HTTPStatus.INTERNAL_SERVER_ERROR,
                 "error_message": "Internal server error",
                 "data": []
             })
-            resp.status_code = 500
+            resp.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
             return resp
 
         @app.route("/predict_img_bytes", methods=['POST'])
@@ -78,23 +92,24 @@ class Api(threading.Thread):
                     if results is not None:
                         final_res = results
                     else:
-                        abort(500)
+                        abort(HTTPStatus.INTERNAL_SERVER_ERROR)
                     final_res = final_res if len(final_res) != 0 else []
                     resp = jsonify({
                         "error_code": 0,
                         "error_message": "Successful.",
                         "data": final_res
                     })
-                    resp.status_code = 200
+                    resp.status_code = HTTPStatus.OK
                     return resp
                 else:
-                    abort(400)
+                    abort(HTTPStatus.BAD_REQUEST)
             except NotSupportedInputFile as e:
-                abort(400)
+                abort(HTTPStatus.BAD_REQUEST)
             except MaxFileSizeExeeded as e:
-                abort(403)
+                abort(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             except Exception as e:
-                abort(500)
+                self._logger.error(e)
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
         @app.route('/predict_json', methods=['POST'])
         def predict_json():
@@ -113,15 +128,35 @@ class Api(threading.Thread):
         def statistics():
             try:
                 resp = jsonify(self.stat.info)
-                resp.status_code = 200
+                resp.status_code = HTTPStatus.OK
             except Exception as e:
-                print(e)
-                abort(500)
+                self._logger.error(e)
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
+
+        @app.route('/status', methods=['GET'])
+        def check_process_status():
+            status = {}
+            try:
+                worker_pids = self.funicorn.get_worker_pids()
+                ps_stt = check_all_ps_status(worker_pids)
+                status['data'] = ps_stt
+                status['error_code'] = HTTPStatus.OK
+                status['error_message'] = 'Successful'
+                resp = jsonify(status)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self._logger.error(e)
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        # End of API
         return app
 
     def run(self):
-        print(self.host, self.port)
+        self._logger.info(
+            f'HTTP Service is running on { self.host}:{self.port}')
         serve(app=self.app, host=self.host, port=self.port,
-              threads=self.threads)
+              threads=self.threads, _quiet=True)

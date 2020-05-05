@@ -1,33 +1,38 @@
 ''' Notes on multiprocessing in python 
 '''
 import os
-import multiprocessing
+import multiprocessing as mp
 import threading
 from collections import namedtuple
 import uuid
 import time
-from api import Api
-from exceptions import LengthEqualtyError
+
 from queue import Empty
-
-
-__all__ = ['FunicornModel', 'Statistic', 'Funicorn']
+from .api import Api
+from .exceptions import LengthEqualtyError
+from .utils import get_logger
+from .stat import Statistic
 
 RESULT_TIMEOUT = 0.001
 DEFAULT_TIMEOUT = 500
 WORKER_TIMEOUT = 20
 DEFAULT_BATCH_TIMEOUT = 0.01
 
-mp = multiprocessing.get_context("spawn")
+# mp = multiprocessing.get_context("spawn") # Error on Server
 
 Task = namedtuple('Task', ['request_id', 'data'])
 
 
 class FunicornModel():
+    '''Experimental'''
+
     def __init__(self, gpu_id, *args, **kwargs):
         self._gpu_id = gpu_id
         self.init_gpu_devices()
         self.init_model(gpu_id, *args, **kwargs)
+
+    def get_logger(self):
+        return get_logger()
 
     def init_gpu_devices(self):
         if self._gpu_id is not None:
@@ -46,7 +51,7 @@ class FunicornModel():
 class BaseWorker():
     def __init__(self, model_cls, input_queue=None, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, destroy_event=None, model_init_args=None, model_init_kwargs=None):
+                 ready_event=None, destroy_event=None, model_init_args=None, model_init_kwargs=None, debug=False):
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
@@ -58,12 +63,17 @@ class BaseWorker():
         self._destroy_event = destroy_event
         self._pid = os.getpid()
         self._model = None
+        self._logger = get_logger(mode='debug' if debug else 'info')
 
     def _recv_request(self):
         raise NotImplementedError
 
     def _send_response(self, request_id, result):
         raise NotImplementedError
+
+    def _setup_gpu_device(self, gpu_id):
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     def run_once(self):
         # Get data from queue
@@ -95,15 +105,17 @@ class BaseWorker():
     def run(self):
         '''Loop into a queue'''
         while True:
-            handled = self.run_once()
-            if self._destroy_event and self._destroy_event.is_set():
-                break
-            if not handled:
-                time.sleep(RESULT_TIMEOUT)
+            try:
+                handled = self.run_once()
+                if self._destroy_event and self._destroy_event.is_set():
+                    break
+                if not handled:
+                    time.sleep(RESULT_TIMEOUT)
+            except Exception as e:
+                self._logger.error(e)
 
 
 class Worker(BaseWorker):
-
     def _recv_request(self):
         try:
             task = self._input_queue.get(timeout=self.batch_timeout)
@@ -120,8 +132,9 @@ class Worker(BaseWorker):
             Every param initialized here are seperable among processes
         '''
         self._pid = os.getpid()
-        self._model = self._model_cls(
-            gpu_id, self._model_init_args, self._model_init_kwargs)
+        self._setup_gpu_device(gpu_id)
+        self._model = self._model_cls(*self._model_init_args,
+                                      **self._model_init_kwargs)
         if ready_event:
             ready_event.set()  # tell father process that init is finished
         if destroy_event:
@@ -131,92 +144,61 @@ class Worker(BaseWorker):
         super().run()
 
 
-class Statistic():
-    def __init__(self, num_workers):
-        self.statistics_info = {
-            'start_time': time.time(),
-            'num_req': 0,
-            'num_res': 0,
-            'avg_latency': 0,
-            'avg_req_per_sec': 0,
-            'avg_res_per_sec': 0,
-            'crashes': 0,
-            'num_workers': num_workers
-        }
-        self.lock = threading.Lock()
-
-    def __getitem__(self, attr):
-        return self.statistics_info[attr]
-
-    def __setitem__(self, attr, value):
-        with self.lock:
-            self.statistics_info[attr] = value
-
-    def __repr__(self):
-        print(self.statistics_info)
-
-    def increment(self, name, value=1):
-        with self.lock:
-            self.statistics_info[name] += value
-
-    def decrement(self, name, value=1):
-        with self.lock:
-            self.statistics_info[name] -= value
-
-    def average(self, name, value):
-        with self.lock:
-            n_req = self.statistics_info['num_req']
-            self.statistics_info[name] += value
-            self.statistics_info[name] /= n_req
-
-    @property
-    def info(self):
-        return self.statistics_info
-
-
 class Funicorn():
     def __init__(self, model_cls, num_workers=1, batch_size=1,
                  http_host='localhost', http_port=5000, gpu_devices=None,
                  model_init_args=None, model_init_kwargs=None):
+
+        self._logger = get_logger()
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self.http_host = http_host
         self.http_port = http_port
         self.gpu_devices = gpu_devices  # TODO
         self.num_workers = num_workers
-        self._init_http_server()
+
         self._input_queue = mp.Queue()
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size,
                            model_init_args=model_init_args, model_init_kwargs=model_init_kwargs)
+        self.pid = os.getpid()
+        self._init_stat()
+        self._init_http_server()
+
         self.wrk_ps = []
         self.wrk_ready_events = []
         self.wrk_destroy_events = []
         self._init_all_workers()
         self._wait_for_worker_ready()
 
-    def _init_http_server(self):
+    def get_worker_pids(self):
+        return [wrk.pid for wrk in self.wrk_ps]
+
+    def _init_stat(self):
         self.stat = Statistic(num_workers=self.num_workers)
+        self.stat.update({'parent_pid': self.pid})
+
+    def _init_http_server(self):
         self._restful = Api(funicorn=self, host=self.http_host,
                             port=self.http_port, stat=self.stat)
         self._restful.daemon = True
         self._restful.start()
 
     def _init_all_workers(self):
-        for i in range(self.num_workers):
+        for idx in range(self.num_workers):
             ready_event = mp.Event()
             destroy_event = mp.Event()
             args = (ready_event, destroy_event)
 
             if self.gpu_devices is not None:
-                gpu_id = self.gpu_devices[i % len(self.gpu_devices)]
+                gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
             else:
-                gpu_id = None
+                gpu_id = -1
             args = (gpu_id, ready_event, destroy_event)
             wrk = mp.Process(target=self._wrk.run, args=args,
                              daemon=True,
-                             name='funicorn-worker')
+                             name=f'funicorn-worker-{idx}')
             wrk.start()
             self.wrk_ps.append(wrk)
             self.wrk_ready_events.append(ready_event)
@@ -227,17 +209,19 @@ class Funicorn():
         for (i, e) in enumerate(self.wrk_ready_events):
             # todo: select all events with timeout
             is_ready = e.wait(timeout)
-            print("gpu worker:%d ready state: %s" % (i, is_ready))
+            self._logger.info("gpu worker:%d ready state: %s" % (i, is_ready))
 
     def predict(self, data, timeout=DEFAULT_TIMEOUT, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
+        self._logger.debug(f'Receive data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
             return self.get_result(request_id, timeout=timeout)
 
     def get_result(self, request_id, timeout=DEFAULT_TIMEOUT):
+        self._logger.debug(f'Wait for result with request_id: {request_id}')
         ret = None
         start_time = time.time()
         while True:
@@ -251,7 +235,8 @@ class Funicorn():
 
     def destroy_all_worker(self):
         '''Destroy all workers'''
-        pass
+        for destroy_event in self.wrk_destroy_events:
+            destroy_event.set()
 
     def check_all_worker(self):
         '''Check status of all workers. Restart them if necessary'''
@@ -264,5 +249,5 @@ class Funicorn():
 
 if __name__ == "__main__":
     binding = Funicorn(FunicornModel, num_workers=3,
-                       batch_size=2, model_init_args=['model_path'])
+                       batch_size=2, model_init_args=['model_path'], model_init_kwargs={'model_path': '/data/ckpt.ckpt'})
     binding.serve()

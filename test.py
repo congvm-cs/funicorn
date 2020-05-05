@@ -1,18 +1,19 @@
-# from src import ModelManager
-# from src import Funicorn
-from service_streamer import ManagedModel, Streamer
+from funicorn import Funicorn
+import os
 
-class TestModel(ManagedModel):
-    def init_model(self, *args, **kwargs):
-        print('init testmodel')
 
+class TestModel():
+    def __init__(self, model_path):
+        print('CUDA_VISIBLE_DEVICES: ', os.getenv('CUDA_VISIBLE_DEVICES'))
+        print(model_path)
     def predict(self, batch):
         return batch
 
 
 if __name__ == '__main__':
-#     funicorn = Funicorn(model_cls=TestModel, batch_size=3, batch_timeout=1000,
-#                     model_args=('model_path', ), num_workers=2, cuda_devices=[1, 1])
-#     funicorn.serve()
-    streamer = Streamer(TestModel, 2, worker_num=2, cuda_devices=[0, 0])
-    print(streamer.predict([10]))
+    funicorn = Funicorn(TestModel,
+                        http_host='0.0.0.0', http_port=8123,
+                        num_workers=3, gpu_devices=[1, 1, 1, 4, 5], 
+                        model_init_kwargs={'model_path': 'path'})
+    print(funicorn.predict(10))
+    funicorn.serve()
