@@ -1,11 +1,12 @@
 from flask import Flask, request, abort, jsonify
 from waitress import serve
 import threading
-from exceptions import NotSupportedInputFile, MaxFileSizeExeeded
 from PIL import Image
 import numpy as np
 import time
 from collections import namedtuple
+from .utils import check_ps_status
+from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded
 
 
 class Api(threading.Thread):
@@ -119,6 +120,20 @@ class Api(threading.Thread):
                 abort(500)
             else:
                 return resp
+
+        @app.route('/status', methods=['GET'])
+        def check_process_status():
+            try:
+                status = check_ps_status(self.stat.info['parent_pid'])
+                resp = jsonify(status)
+                resp.status_code = 200
+            except Exception as e:
+                print(e)
+                abort(500)
+            else:
+                return resp
+
+        # End of API
         return app
 
     def run(self):

@@ -6,12 +6,12 @@ import threading
 from collections import namedtuple
 import uuid
 import time
-from api import Api
-from exceptions import LengthEqualtyError
+
 from queue import Empty
-
-
-__all__ = ['FunicornModel', 'Statistic', 'Funicorn']
+from .api import Api
+from .exceptions import LengthEqualtyError
+from .logger import get_logger
+from .stat import Statistic
 
 RESULT_TIMEOUT = 0.001
 DEFAULT_TIMEOUT = 500
@@ -28,6 +28,9 @@ class FunicornModel():
         self._gpu_id = gpu_id
         self.init_gpu_devices()
         self.init_model(gpu_id, *args, **kwargs)
+
+    def get_logger(self):
+        return get_logger()
 
     def init_gpu_devices(self):
         if self._gpu_id is not None:
@@ -58,6 +61,7 @@ class BaseWorker():
         self._destroy_event = destroy_event
         self._pid = os.getpid()
         self._model = None
+        self._logger = get_logger()
 
     def _recv_request(self):
         raise NotImplementedError
@@ -95,15 +99,17 @@ class BaseWorker():
     def run(self):
         '''Loop into a queue'''
         while True:
-            handled = self.run_once()
-            if self._destroy_event and self._destroy_event.is_set():
-                break
-            if not handled:
-                time.sleep(RESULT_TIMEOUT)
+            try:
+                handled = self.run_once()
+                if self._destroy_event and self._destroy_event.is_set():
+                    break
+                if not handled:
+                    time.sleep(RESULT_TIMEOUT)
+            except Exception as e:
+                self._logger.error(e)
 
 
 class Worker(BaseWorker):
-
     def _recv_request(self):
         try:
             task = self._input_queue.get(timeout=self.batch_timeout)
@@ -131,49 +137,6 @@ class Worker(BaseWorker):
         super().run()
 
 
-class Statistic():
-    def __init__(self, num_workers):
-        self.statistics_info = {
-            'start_time': time.time(),
-            'num_req': 0,
-            'num_res': 0,
-            'avg_latency': 0,
-            'avg_req_per_sec': 0,
-            'avg_res_per_sec': 0,
-            'crashes': 0,
-            'num_workers': num_workers
-        }
-        self.lock = threading.Lock()
-
-    def __getitem__(self, attr):
-        return self.statistics_info[attr]
-
-    def __setitem__(self, attr, value):
-        with self.lock:
-            self.statistics_info[attr] = value
-
-    def __repr__(self):
-        print(self.statistics_info)
-
-    def increment(self, name, value=1):
-        with self.lock:
-            self.statistics_info[name] += value
-
-    def decrement(self, name, value=1):
-        with self.lock:
-            self.statistics_info[name] -= value
-
-    def average(self, name, value):
-        with self.lock:
-            n_req = self.statistics_info['num_req']
-            self.statistics_info[name] += value
-            self.statistics_info[name] /= n_req
-
-    @property
-    def info(self):
-        return self.statistics_info
-
-
 class Funicorn():
     def __init__(self, model_cls, num_workers=1, batch_size=1,
                  http_host='localhost', http_port=5000, gpu_devices=None,
@@ -184,20 +147,27 @@ class Funicorn():
         self.http_port = http_port
         self.gpu_devices = gpu_devices  # TODO
         self.num_workers = num_workers
-        self._init_http_server()
+        
         self._input_queue = mp.Queue()
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size,
                            model_init_args=model_init_args, model_init_kwargs=model_init_kwargs)
+        self.pid = os.getpid()
+        self._init_stat()
+        self._init_http_server()
+
         self.wrk_ps = []
         self.wrk_ready_events = []
         self.wrk_destroy_events = []
         self._init_all_workers()
         self._wait_for_worker_ready()
 
-    def _init_http_server(self):
+    def _init_stat(self):
         self.stat = Statistic(num_workers=self.num_workers)
+        self.stat.update({'parent_pid': self.pid})
+
+    def _init_http_server(self):
         self._restful = Api(funicorn=self, host=self.http_host,
                             port=self.http_port, stat=self.stat)
         self._restful.daemon = True
@@ -218,6 +188,7 @@ class Funicorn():
                              daemon=True,
                              name='funicorn-worker')
             wrk.start()
+            # wrk.join()
             self.wrk_ps.append(wrk)
             self.wrk_ready_events.append(ready_event)
             self.wrk_destroy_events.append(destroy_event)
@@ -251,7 +222,8 @@ class Funicorn():
 
     def destroy_all_worker(self):
         '''Destroy all workers'''
-        pass
+        for destroy_event in self.wrk_destroy_events:
+            destroy_event.set()
 
     def check_all_worker(self):
         '''Check status of all workers. Restart them if necessary'''
@@ -260,6 +232,8 @@ class Funicorn():
     def serve(self):
         while True:
             time.sleep(300)
+        # for wrk in self.wrk_ps:
+        #     wrk.join()
 
 
 if __name__ == "__main__":

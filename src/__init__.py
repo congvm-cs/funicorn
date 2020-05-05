@@ -1,0 +1,1 @@
+from .funicorn import Funicorn, FunicornModel
