@@ -11,6 +11,8 @@ class TestModel():
 
 
 if __name__ == '__main__':
-    funicorn = Funicorn(TestModel, num_workers=3, gpu_devices=[1, 2, 3, 4, 5])
+    funicorn = Funicorn(TestModel,
+                        http_host='0.0.0.0', http_port=8123,
+                        num_workers=3, gpu_devices=[1, 1, 1, 4, 5])
     print(funicorn.predict(10))
     funicorn.serve()

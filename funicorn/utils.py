@@ -47,7 +47,6 @@ if __name__ == '__main__':
 
     print('Starting')
     for _ in range(5):
-        # t = threading.Thread(target=run, daemon=False)
         t = multiprocessing.Process(target=run, daemon=True)
         t.start()
 

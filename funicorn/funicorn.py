@@ -1,7 +1,7 @@
 ''' Notes on multiprocessing in python 
 '''
 import os
-import multiprocessing
+import multiprocessing as mp
 import threading
 from collections import namedtuple
 import uuid
@@ -18,7 +18,7 @@ DEFAULT_TIMEOUT = 500
 WORKER_TIMEOUT = 20
 DEFAULT_BATCH_TIMEOUT = 0.01
 
-mp = multiprocessing.get_context("spawn")
+# mp = multiprocessing.get_context("spawn") # Error on Server
 
 Task = namedtuple('Task', ['request_id', 'data'])
 
