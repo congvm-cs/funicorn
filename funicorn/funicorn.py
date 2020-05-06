@@ -53,7 +53,9 @@ class FunicornModel():
 class BaseWorker():
     def __init__(self, model_cls, input_queue=None, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, destroy_event=None, model_init_args=None, model_init_kwargs=None, debug=False):
+                 ready_event=None, destroy_event=None, 
+                 model_init_args=None, model_init_kwargs=None, 
+                 debug=False):
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
@@ -72,10 +74,6 @@ class BaseWorker():
 
     def _send_response(self, request_id, result):
         raise NotImplementedError
-
-    # def _setup_gpu_device(self, gpu_id):
-    #     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    #     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     def run_once(self):
         # Get data from queue
@@ -136,9 +134,8 @@ class Worker(BaseWorker):
         '''
         self._pid = os.getpid()
         self._model_init_kwargs.update({'gpu_id': gpu_id})
-        self._model_init_args.insert(0, gpu_id)
-        self._model = self._model_cls(*self._model_init_args,
-                                      **self._model_init_kwargs)
+        self._model = self._model_cls(**self._model_init_kwargs)
+
         if ready_event:
             ready_event.set()  # tell father process that init is finished
         if destroy_event:
@@ -152,9 +149,9 @@ class Funicorn():
     def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
                  http_threads=30, max_queue_size=MAX_QUEUE_SIZE,
                  http_host='localhost', http_port=5000, gpu_devices=None,
-                 model_init_args=None, model_init_kwargs=None):
+                 model_init_args=None, model_init_kwargs=None, debug=False):
 
-        self._logger = get_logger(mode='info')
+        self._logger = get_logger(mode='debug' if debug else 'info')
         self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self.http_host = http_host
@@ -218,20 +215,20 @@ class Funicorn():
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
-        self._logger.debug(f'Receive data with request_id: {request_id}')
+        self._logger.info(f'Request data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
             return self.get_result(request_id)
 
     def get_result(self, request_id):
-        self._logger.debug(f'Wait for result with request_id: {request_id}')
         ret = None
         while True:
             ret = self._result_dict.get(request_id, None)
             if ret is not None:
                 break
             time.sleep(RESULT_TIMEOUT)
+        self._logger.info(f'Received with request_id: {request_id}')
         return ret
 
     def destroy_all_worker(self):
@@ -246,9 +243,3 @@ class Funicorn():
     def serve(self):
         while True:
             time.sleep(300)
-
-
-# if __name__ == "__main__":
-#     binding = Funicorn(FunicornModel, num_workers=3,
-#                        batch_size=2, model_init_args=['model_path'], model_init_kwargs={'model_path': '/data/ckpt.ckpt'})
-#     binding.serve()
