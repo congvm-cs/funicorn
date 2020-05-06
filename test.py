@@ -6,7 +6,6 @@ import tensorflow as tf
 
 class TestModel():
     def __init__(self, gpu_id, model_path):
-        print('CUDA_VISIBLE_DEVICES: ', os.getenv('CUDA_VISIBLE_DEVICES'))
         self.logger = get_logger()
         self.graph = tf.Graph()
         self.sess = tf.Session(graph=self.graph)

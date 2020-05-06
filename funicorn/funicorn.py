@@ -224,7 +224,7 @@ class Funicorn():
     def get_result(self, request_id):
         ret = None
         while True:
-            ret = self._result_dict.get(request_id, None)
+            ret = self._result_dict.pop(request_id, None)
             if ret is not None:
                 break
             time.sleep(RESULT_TIMEOUT)
