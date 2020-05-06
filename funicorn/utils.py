@@ -28,11 +28,10 @@ def check_ps_status(pid):
     ps = psutil.Process(pid)
     return ps.status()
 
-# https://stackoverflow.com/questions/17745914/python-logging-module-is-printing-lines-multiple-times
-
 
 def get_logger(name='logger', mode='debug'):
     logger = logging.getLogger(name)
+    # https://stackoverflow.com/questions/17745914/python-logging-module-is-printing-lines-multiple-times
     if not logger.hasHandlers():
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
@@ -43,16 +42,16 @@ def get_logger(name='logger', mode='debug'):
     return logger
 
 
-if __name__ == '__main__':
-    def run():
-        logger = get_logger('worker-1', mode='debug')
-        logger.info('This is a logger for debugging.')
-        logger.debug('This is a logger for debugging.')
+# if __name__ == '__main__':
+#     def run():
+#         logger = get_logger('worker-1', mode='debug')
+#         logger.info('This is a logger for debugging.')
+#         logger.debug('This is a logger for debugging.')
 
-    print('Starting')
-    for _ in range(5):
-        t = multiprocessing.Process(target=run, daemon=True)
-        t.start()
+#     print('Starting')
+#     for _ in range(5):
+#         t = multiprocessing.Process(target=run, daemon=True)
+#         t.start()
 
-    while True:
-        time.sleep(0.1)
+#     while True:
+#         time.sleep(0.1)

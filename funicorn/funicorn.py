@@ -13,6 +13,7 @@ from .exceptions import LengthEqualtyError
 from .utils import get_logger
 from .stat import Statistic
 
+MAX_QUEUE_SIZE = 1000
 RESULT_TIMEOUT = 0.001
 DEFAULT_TIMEOUT = 500
 WORKER_TIMEOUT = 20
@@ -72,9 +73,9 @@ class BaseWorker():
     def _send_response(self, request_id, result):
         raise NotImplementedError
 
-    def _setup_gpu_device(self, gpu_id):
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    # def _setup_gpu_device(self, gpu_id):
+    #     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    #     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     def run_once(self):
         # Get data from queue
@@ -134,8 +135,8 @@ class Worker(BaseWorker):
             Every param initialized here are seperable among processes
         '''
         self._pid = os.getpid()
-        self._setup_gpu_device(gpu_id)
         self._model_init_kwargs.update({'gpu_id': gpu_id})
+        self._model_init_args.insert(0, gpu_id)
         self._model = self._model_cls(*self._model_init_args,
                                       **self._model_init_kwargs)
         if ready_event:
@@ -149,6 +150,7 @@ class Worker(BaseWorker):
 
 class Funicorn():
     def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
+                 http_threads=30, max_queue_size=MAX_QUEUE_SIZE,
                  http_host='localhost', http_port=5000, gpu_devices=None,
                  model_init_args=None, model_init_kwargs=None):
 
@@ -157,10 +159,9 @@ class Funicorn():
         self._model_init_kwargs = model_init_kwargs or {}
         self.http_host = http_host
         self.http_port = http_port
-        self.gpu_devices = gpu_devices  # TODO
+        self.gpu_devices = gpu_devices
         self.num_workers = num_workers
-
-        self._input_queue = mp.Queue()
+        self._input_queue = mp.Queue(maxsize=max_queue_size)
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size, batch_timeout=batch_timeout,
@@ -214,24 +215,21 @@ class Funicorn():
             is_ready = e.wait(timeout)
             self._logger.info("gpu worker:%d ready state: %s" % (i, is_ready))
 
-    def predict(self, data, timeout=DEFAULT_TIMEOUT, asynchronous=False):
+    def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
         self._logger.debug(f'Receive data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
-            return self.get_result(request_id, timeout=timeout)
+            return self.get_result(request_id)
 
-    def get_result(self, request_id, timeout=DEFAULT_TIMEOUT):
+    def get_result(self, request_id):
         self._logger.debug(f'Wait for result with request_id: {request_id}')
         ret = None
-        start_time = time.time()
         while True:
             ret = self._result_dict.get(request_id, None)
             if ret is not None:
-                break
-            if time.time() - start_time > timeout:
                 break
             time.sleep(RESULT_TIMEOUT)
         return ret
@@ -250,7 +248,7 @@ class Funicorn():
             time.sleep(300)
 
 
-if __name__ == "__main__":
-    binding = Funicorn(FunicornModel, num_workers=3,
-                       batch_size=2, model_init_args=['model_path'], model_init_kwargs={'model_path': '/data/ckpt.ckpt'})
-    binding.serve()
+# if __name__ == "__main__":
+#     binding = Funicorn(FunicornModel, num_workers=3,
+#                        batch_size=2, model_init_args=['model_path'], model_init_kwargs={'model_path': '/data/ckpt.ckpt'})
+#     binding.serve()

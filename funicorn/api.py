@@ -88,7 +88,7 @@ class Api(threading.Thread):
             try:
                 check_request_size(request)
                 if 'img_bytes' in request.files:
-                    img_bytes = request.files['img_bytes']  # .read()
+                    img_bytes = request.files['img_bytes']
                     img = convert_bytes_to_pil_image(img_bytes)
                     results = self.funicorn.predict(img)
                     if results is not None:
