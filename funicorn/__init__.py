@@ -1,2 +1,5 @@
 from .funicorn import Funicorn, FunicornModel
-__version__ = '1.0.1-a'
+
+# __all__ = ['Funicorn', 'FunicornModel']
+
+__version__ = '1.0.2-a'

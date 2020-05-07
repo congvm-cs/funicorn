@@ -6,24 +6,26 @@ import numpy as np
 import time
 from collections import namedtuple
 from http import HTTPStatus
-from .utils import check_all_ps_status
-from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded
-from .utils import get_logger
+import traceback
 
 
-class Api(threading.Thread):
-    def __init__(self, funicorn, host, port, stat=None, threads=30, timeout=1000, debug=False):
-        threading.Thread.__init__(self)
+from ..exceptions import NotSupportedInputFile, MaxFileSizeExeeded
+from ..utils import get_logger
+from ..utils import check_all_ps_status
+
+class HttpApi(threading.Thread):
+    def __init__(self, funicorn, host, port, stat=None, threads=40, timeout=1000, debug=False, daemon=True):
+        threading.Thread.__init__(self, daemon=daemon)
         self.host = host
         self.port = port
         self.threads = threads
         self.timeout = timeout
-        self.app = self.create_restful()
+        self.app = self.create_app()
         self.funicorn = funicorn
         self.stat = stat
-        self._logger = get_logger(mode='debug' if debug else 'info')
+        self.logger = get_logger(mode='debug' if debug else 'info')
 
-    def create_restful(self):
+    def create_app(self):
         app = Flask(__name__)
 
         def check_request_size(request, max_size=5 * 1024 * 1024):
@@ -31,7 +33,7 @@ class Api(threading.Thread):
                 raise MaxFileSizeExeeded(
                     "Input file size too large, limit is {:0.2f}MB".format(max_size/(1024**2)))
 
-        def convert_bytes_to_pil_image(img_bytes):
+        def convert_bytes_to_img_arr(img_bytes):
             try:
                 img = Image.open(img_bytes).convert("RGB")
                 img = np.array(img)
@@ -86,9 +88,9 @@ class Api(threading.Thread):
             try:
                 check_request_size(request)
                 if 'img_bytes' in request.files:
-                    img_bytes = request.files['img_bytes']  # .read()
-                    img = convert_bytes_to_pil_image(img_bytes)
-                    results = self.funicorn.predict(img)
+                    img_bytes = request.files['img_bytes']
+                    img = convert_bytes_to_img_arr(img_bytes)
+                    results = self.funicorn.predict_img_bytes(img)
                     if results is not None:
                         final_res = results
                     else:
@@ -108,7 +110,7 @@ class Api(threading.Thread):
             except MaxFileSizeExeeded as e:
                 abort(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             except Exception as e:
-                self._logger.error(e)
+                self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
         @app.route('/predict_json', methods=['POST'])
@@ -118,7 +120,7 @@ class Api(threading.Thread):
                 json = request.json
                 result = self.funicorn.predict(json)
                 self.stat.increment('num_res')
-                print('result is', result)
+                self.logger.info(f'result is: {result}')
             except Exception as e:
                 return jsonify({'result': e})
             else:
@@ -130,24 +132,20 @@ class Api(threading.Thread):
                 resp = jsonify(self.stat.info)
                 resp.status_code = HTTPStatus.OK
             except Exception as e:
-                self._logger.error(e)
+                self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
 
         @app.route('/status', methods=['GET'])
         def check_process_status():
-            status = {}
             try:
                 worker_pids = self.funicorn.get_worker_pids()
                 ps_stt = check_all_ps_status(worker_pids)
-                status['data'] = ps_stt
-                status['error_code'] = HTTPStatus.OK
-                status['error_message'] = 'Successful'
-                resp = jsonify(status)
+                resp = jsonify(ps_stt)
                 resp.status_code = HTTPStatus.OK
             except Exception as e:
-                self._logger.error(e)
+                self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
@@ -155,8 +153,10 @@ class Api(threading.Thread):
         # End of API
         return app
 
+    # https://docs.pylonsproject.org/projects/waitress/en/stable/arguments.html#arguments
     def run(self):
-        self._logger.info(
+        self.logger.info(
             f'HTTP Service is running on { self.host}:{self.port}')
-        serve(app=self.app, host=self.host, port=self.port,
-              threads=self.threads, _quiet=True)
+        serve(app=self.app,
+              host=self.host, port=self.port,
+              threads=self.threads, _quiet=True, backlog=1024)
