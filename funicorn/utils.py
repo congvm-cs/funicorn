@@ -3,9 +3,14 @@ import multiprocessing
 import threading
 import psutil
 import logging
-
+import cv2
+import numpy as np
 # cvt_status = lambda is_alive: 'alive' if is_alive == 'running' else 'dead'
 
+def img_bytes_to_img_arr(img_bytes):
+    img_flatten = np.frombuffer(img_bytes, dtype=np.uint8)
+    img_arr_decoded = cv2.imdecode(img_flatten, cv2.IMREAD_ANYCOLOR)
+    return img_arr_decoded
 
 def check_tree_status(parent_pid, including_parent=True):
     status = {}
@@ -40,18 +45,3 @@ def get_logger(name='logger', mode='debug'):
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG if mode == 'debug' else logging.INFO)
     return logger
-
-
-# if __name__ == '__main__':
-#     def run():
-#         logger = get_logger('worker-1', mode='debug')
-#         logger.info('This is a logger for debugging.')
-#         logger.debug('This is a logger for debugging.')
-
-#     print('Starting')
-#     for _ in range(5):
-#         t = multiprocessing.Process(target=run, daemon=True)
-#         t.start()
-
-#     while True:
-#         time.sleep(0.1)
