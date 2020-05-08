@@ -2,13 +2,14 @@
 '''
 import os
 import multiprocessing as mp
+from random import randint
 import threading
 from collections import namedtuple
 import uuid
 import time
 import json
 from queue import Empty
-
+from queue import Queue
 from .exceptions import LengthEqualtyError
 from .utils import get_logger, img_bytes_to_img_arr
 from .stat import Statistic
@@ -96,7 +97,9 @@ class BaseWorker():
         model_input = [task.data for task in batch]
 
         # Model predict
+        start_model_time = time.time()
         results = self._model.predict(model_input)
+        end_model_time = time.time()
         assert isinstance(results, list), ValueError(
             '`results` must be a list')
         assert len(results) == len(batch), LengthEqualtyError(
@@ -104,7 +107,8 @@ class BaseWorker():
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
         self._logger.info(
-            f'[Worker-{self._worker_id}] Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}')
+            f'[Worker-{self._worker_id}] Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}\
+                 - model-time: {end_model_time - start_model_time}')
         # Return None or something to notify number of data in queue
         return batch_size
 
@@ -125,7 +129,7 @@ class Worker(BaseWorker):
     def _recv_request(self):
         try:
             start_time = time.time()
-            task = self._input_queue.get(timeout=self.batch_timeout)
+            task = self._wrk_queue.get(timeout=self.batch_timeout)
             self._logger.info(
                 f'[_recv_request] get from queue {time.time() - start_time}')
         except Empty:
@@ -136,10 +140,11 @@ class Worker(BaseWorker):
     def _send_response(self, request_id, result):
         self._result_dict[request_id] = result
 
-    def run(self, worker_id=None, gpu_id=None, ready_event=None, destroy_event=None):
+    def run(self, worker_id=None, gpu_id=None, ready_event=None, destroy_event=None, wrk_queue=None):
         ''' Init process parameters
             Every param initialized here are seperable among processes
         '''
+        self._wrk_queue = wrk_queue or self._input_queue
         self._worker_id = worker_id
         self._pid = os.getpid()
         self._model_init_kwargs.update({'gpu_id': gpu_id})
@@ -179,8 +184,8 @@ class Funicorn():
             raise ConnectionError('rpc_port and http_port must be different.')
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
-        # self._input_queue = mp.Queue(maxsize=max_queue_size)
-        self._input_queue = mp.Manager().Queue(maxsize=max_queue_size)
+        self._input_queue = Queue(maxsize=max_queue_size)
+        # self._input_queue = mp.Manager().Queue(maxsize=max_queue_size) # Much slower
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size, batch_timeout=batch_timeout/1000,
@@ -191,6 +196,7 @@ class Funicorn():
         self.wrk_ps = []
         self.wrk_ready_events = []
         self.wrk_destroy_events = []
+        self.queue_ps = []
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
@@ -222,7 +228,9 @@ class Funicorn():
                 gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
             else:
                 gpu_id = -1
-            args = (idx, gpu_id, ready_event, destroy_event)
+
+            wrk_queue = mp.Queue()
+            args = (idx, gpu_id, ready_event, destroy_event, wrk_queue)
             wrk = mp.Process(target=self._wrk.run, args=args,
                              daemon=True,
                              name=f'funicorn-worker-{idx}')
@@ -230,6 +238,7 @@ class Funicorn():
             self.wrk_ps.append(wrk)
             self.wrk_ready_events.append(ready_event)
             self.wrk_destroy_events.append(destroy_event)
+            self.queue_ps.append(wrk_queue)
 
     def _wait_for_worker_ready(self, timeout=WORKER_TIMEOUT):
         # wait for all workers finishing init
@@ -240,7 +249,11 @@ class Funicorn():
 
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
-        self._input_queue.put(Task(request_id=request_id, data=data))
+
+        # Distribute task to wrk_queue
+        input_queue = self.queue_ps[randint(0, len(self.queue_ps) - 1)]
+        input_queue.put(Task(request_id=request_id, data=data))
+        # self._input_queue.put(Task(request_id=request_id, data=data))
         self._logger.info(
             f'[Funicorn] Request data with request_id: {request_id}')
         if asynchronous:
