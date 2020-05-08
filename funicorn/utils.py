@@ -7,10 +7,12 @@ import cv2
 import numpy as np
 # cvt_status = lambda is_alive: 'alive' if is_alive == 'running' else 'dead'
 
+
 def img_bytes_to_img_arr(img_bytes):
     img_flatten = np.frombuffer(img_bytes, dtype=np.uint8)
     img_arr_decoded = cv2.imdecode(img_flatten, cv2.IMREAD_ANYCOLOR)
     return img_arr_decoded
+
 
 def check_tree_status(parent_pid, including_parent=True):
     status = {}

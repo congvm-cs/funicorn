@@ -103,7 +103,8 @@ class BaseWorker():
             'Length of result and batch must be equal')
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
-        self._logger.info(f'[Worker-{self._worker_id}] Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}')
+        self._logger.info(
+            f'[Worker-{self._worker_id}] Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}')
         # Return None or something to notify number of data in queue
         return batch_size
 
@@ -123,7 +124,10 @@ class BaseWorker():
 class Worker(BaseWorker):
     def _recv_request(self):
         try:
+            start_time = time.time()
             task = self._input_queue.get(timeout=self.batch_timeout)
+            self._logger.info(
+                f'[_recv_request] get from queue {time.time() - start_time}')
         except Empty:
             raise TimeoutError
         else:
@@ -152,10 +156,10 @@ class Worker(BaseWorker):
 
 
 class Funicorn():
-    def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 max_queue_size=MAX_QUEUE_SIZE,
-                 http_host=None, http_port=5000, http_threads=30, 
-                 rpc_host=None, rpc_port=5001, rpc_threads=30, 
+    def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=10,
+                 max_queue_size=1000,
+                 http_host=None, http_port=5000, http_threads=30,
+                 rpc_host=None, rpc_port=5001, rpc_threads=30,
                  gpu_devices=None,
                  model_init_args=None, model_init_kwargs=None, debug=False):
 
@@ -170,15 +174,16 @@ class Funicorn():
         self.rpc_host = rpc_host
         self.rpc_port = rpc_port
         self.rpc_threads = rpc_threads
-        
+
         if (self.rpc_host and self.http_host) and (self.rpc_port == self.http_port):
-                raise ConnectionError('rpc_port and http_port must be different.')
+            raise ConnectionError('rpc_port and http_port must be different.')
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
-        self._input_queue = mp.Queue(maxsize=max_queue_size)
+        # self._input_queue = mp.Queue(maxsize=max_queue_size)
+        self._input_queue = mp.Manager().Queue(maxsize=max_queue_size)
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
-                           batch_size=batch_size, batch_timeout=batch_timeout,
+                           batch_size=batch_size, batch_timeout=batch_timeout/1000,
                            model_init_args=model_init_args, model_init_kwargs=model_init_kwargs)
         self.pid = os.getpid()
         self._init_stat()
@@ -195,16 +200,16 @@ class Funicorn():
         self.stat.update({'parent_pid': self.pid})
 
     def _init_rpc_server(self):
-        self._rpc = ThriftAPI(funicorn=self, 
-                            host=self.rpc_host, port=self.rpc_port, 
-                            stat=self.stat, 
-                            threads=self.rpc_threads)
+        self._rpc = ThriftAPI(funicorn=self,
+                              host=self.rpc_host, port=self.rpc_port,
+                              stat=self.stat,
+                              threads=self.rpc_threads)
         self._rpc.start()
 
     def _init_http_server(self):
         self._http = HttpApi(funicorn=self, host=self.http_host,
-                            port=self.http_port, stat=self.stat, 
-                            threads=self.http_threads)
+                             port=self.http_port, stat=self.stat,
+                             threads=self.http_threads)
         self._http.start()
 
     def _init_all_workers(self):
@@ -236,14 +241,18 @@ class Funicorn():
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
-        self._logger.info(f'[Funicorn] Request data with request_id: {request_id}')
+        self._logger.info(
+            f'[Funicorn] Request data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
             return self.get_result(request_id)
 
     def predict_img_bytes(self, img_bytes):
+        start_time = time.time()
         img_arr = img_bytes_to_img_arr(img_bytes)
+        self._logger.info(
+            f'[img_bytes_to_img_arr] process-time: {time.time() - start_time}')
         json_result = self.predict(img_arr)
         if isinstance(json_result, str) or isinstance(json_result, dict):
             ValueError('The result from rpc must be json string')
@@ -270,8 +279,8 @@ class Funicorn():
 
     def ping(self):
         self._logger.info("[Funicorn] Ping!")
-        return 
-        
+        return
+
     def serve(self):
         self._init_all_workers()
         self._wait_for_worker_ready()
