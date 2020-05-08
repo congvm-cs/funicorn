@@ -1,17 +1,9 @@
-# from setuptools import setup
-
 from setuptools import setup, find_packages
+from funicorn import __version__
 from os import path
 
 with open('requirements.txt') as f:
     requirements = f.read().splitlines()
-
-# setup metainfo
-libinfo_py = path.join('funicorn', '__init__.py')
-libinfo_content = open(libinfo_py, 'r').readlines()
-version_line = [l.strip()
-                for l in libinfo_content if l.startswith('__version__')][0]
-exec(version_line)  # produce __version__
 
 setup(
     name='funicorn',
@@ -32,11 +24,11 @@ setup(
         'Operating System :: OS Independent',
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
     ),
-    # entry_points={
-    #     'console_scripts': ['face-serving-start=face_service.cli:main',
-    #                         'facessd-serving-start=face_service.cli:main_ssd',
-    #                         'facemnet-serving-start=face_service.cli:main_mnet'
-    #                         'face-serving-terminate=face_service.cli:terminate'],
-    # },
-    # keywords='tts nlp tensorflow tacotron machine learning sentence encoding embedding serving',
+    entry_points={
+        'console_scripts': ['funicorn-start=funicorn.cli:start',
+                            'funicorn-terminate=funicorn.cli:terminate',
+                            'funicorn-restart=funicorn.cli:restart',
+                            'funicorn-stop=funicorn.cli:idle'
+                            ],
+    }
 )

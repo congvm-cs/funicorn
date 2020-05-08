@@ -156,7 +156,7 @@ class HttpApi(threading.Thread):
     # https://docs.pylonsproject.org/projects/waitress/en/stable/arguments.html#arguments
     def run(self):
         self.logger.info(
-            f'HTTP Service is running on { self.host}:{self.port}')
+            f'HTTP Service is running on http://{self.host}:{self.port}')
         serve(app=self.app,
               host=self.host, port=self.port,
               threads=self.threads, _quiet=True, backlog=1024)
