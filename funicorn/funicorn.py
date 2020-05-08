@@ -20,7 +20,7 @@ from .thriftcorn import ThriftAPI
 MAX_QUEUE_SIZE = 1000
 RESULT_TIMEOUT = 0.001
 DEFAULT_TIMEOUT = 500
-WORKER_TIMEOUT = 20
+WORKER_TIMEOUT = 3
 DEFAULT_BATCH_TIMEOUT = 0.01
 
 # mp = multiprocessing.get_context("spawn") # Error on Server
@@ -57,10 +57,8 @@ class FunicornModel():
 class BaseWorker():
     def __init__(self, model_cls, input_queue=None, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, destroy_event=None,
-                 model_init_args=None, model_init_kwargs=None,
+                 ready_event=None, destroy_event=None, model_init_kwargs=None,
                  debug=False):
-        self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
         self._input_queue = input_queue
@@ -166,10 +164,9 @@ class Funicorn():
                  http_host=None, http_port=5000, http_threads=30,
                  rpc_host=None, rpc_port=5001, rpc_threads=30,
                  gpu_devices=None,
-                 model_init_args=None, model_init_kwargs=None, debug=False):
+                model_init_kwargs=None, debug=False):
 
         self._logger = get_logger(mode='debug' if debug else 'info')
-        self._model_init_args = model_init_args or []
         self._model_init_kwargs = model_init_kwargs or {}
 
         self.http_host = http_host
@@ -189,7 +186,7 @@ class Funicorn():
         self._result_dict = mp.Manager().dict()
         self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size, batch_timeout=batch_timeout/1000,
-                           model_init_args=model_init_args, model_init_kwargs=model_init_kwargs)
+                           model_init_kwargs=model_init_kwargs)
         self.pid = os.getpid()
         self._init_stat()
 
@@ -240,12 +237,15 @@ class Funicorn():
             self.wrk_destroy_events.append(destroy_event)
             self.queue_ps.append(wrk_queue)
 
-    def _wait_for_worker_ready(self, timeout=WORKER_TIMEOUT):
+    def _wait_for_worker_and_serve(self, timeout=WORKER_TIMEOUT):
         # wait for all workers finishing init
         for (i, e) in enumerate(self.wrk_ready_events):
             # todo: select all events with timeout
             is_ready = e.wait(timeout)
             self._logger.info("[Worker-%d] ready state: %s" % (i, is_ready))
+            if not is_ready:
+                self._logger.error("[Worker-%d] cannot start. EXIT!" % (i))
+                exit()
 
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
@@ -294,14 +294,12 @@ class Funicorn():
         self._logger.info("[Funicorn] Ping!")
         return
 
-    def serve(self):
-        self._init_all_workers()
-        self._wait_for_worker_ready()
-
+    def serve(self):    
+        self._init_all_workers()        
+        self._wait_for_worker_and_serve()
         if self.http_host:
             self._init_http_server()
         if self.rpc_host:
             self._init_rpc_server()
-
         while True:
             time.sleep(300)

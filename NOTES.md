@@ -29,4 +29,4 @@
 * [ - ] Add more Worker with specific GPU_ID
 * [ - ] Restart Workers
 * [ - ] Idle Workers
-* [ - ] Start Funicorn Service
+* [ x ] Start Funicorn Service

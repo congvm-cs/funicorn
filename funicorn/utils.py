@@ -47,3 +47,13 @@ def get_logger(name='logger', mode='debug'):
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG if mode == 'debug' else logging.INFO)
     return logger
+
+
+### CLI
+
+from inspect import formatargspec, getfullargspec
+
+def get_args_from_class(cls):
+    init_cls_args = getfullargspec(cls)
+    init_cls_args.args.remove('self')
+    return init_cls_args.args

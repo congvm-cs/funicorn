@@ -3,7 +3,6 @@ from funicorn.utils import get_logger
 import os
 import tensorflow as tf
 
-
 class TestModel():
     def __init__(self, gpu_id, model_path):
         self.logger = get_logger()
@@ -24,11 +23,11 @@ class TestModel():
         return result
 
 
-if __name__ == '__main__':
-    funicorn = Funicorn(TestModel,
-                        http_host='0.0.0.0', http_port=8000,
-                        rpc_host='0.0.0.0', rpc_port=8001,
-                        batch_size=1, batch_timeout=0.01,
-                        num_workers=1, gpu_devices=[1, 1, 1, 4, 5],
-                        model_init_kwargs={'model_path': 'path'})
-    funicorn.serve()
+# if __name__ == '__main__':
+#     funicorn = Funicorn(TestModel,
+#                         http_host='0.0.0.0', http_port=8000,
+#                         rpc_host='0.0.0.0', rpc_port=8001,
+#                         batch_size=1, batch_timeout=0.01,
+#                         num_workers=1, gpu_devices=[1, 1, 1, 4, 5],
+#                         model_init_kwargs={'model_path': 'path'})
+#     funicorn.serve()

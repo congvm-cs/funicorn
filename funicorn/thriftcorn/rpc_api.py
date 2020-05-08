@@ -17,7 +17,7 @@ class ThriftAPI(threading.Thread):
         threading.Thread.__init__(self, daemon=daemon)
         
     def run(self):
-        self.logger.info(f'RPC Server is starting at {self.host}:{self.port}')
+        self.logger.info(f'RPC Server is starting at http://{self.host}:{self.port}')
         processors = Processor(self.funicorn)
         socket = TSocket.TServerSocket(host=self.host, port=self.port)
         prot_fac = TBinaryProtocol.TBinaryProtocolFactory()
