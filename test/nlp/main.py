@@ -9,7 +9,7 @@ class NLPThriftApi(ThriftAPI):
     def __init__(self, *args, **kwargs):
         ThriftAPI.__init__(self, *args, **kwargs)
         self.logger.name = coloring_network_name('NLPThriftApi')
-        
+
     def init_processor(self, handler):
         self.logger.info('Initialize NLPThriftApi')
         processor = NLPService.Processor(handler)
@@ -22,7 +22,8 @@ class NLPGateWay(Funicorn):
     def __init__(self, *args, **kwargs):
         Funicorn.__init__(self, *args, **kwargs)
         self.entries = [
-            'Kiki-Handler-V1', 'Kiki-Handler-V2'
+            'Kiki-Handler-V1', 
+            'Kiki-Handler-V2'
         ]
         self.logger.name = coloring_funicorn_name('NLPGateWay')
 

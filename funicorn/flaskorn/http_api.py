@@ -71,6 +71,7 @@ class HttpApi(threading.Thread):
     def create_app(self):
         app = Flask(__name__)
         app = self.init_exception(app)
+
         def check_request_size(request, max_size=5 * 1024 * 1024):
             if request.content_length > max_size:
                 raise MaxFileSizeExeeded(
@@ -153,6 +154,53 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
+        @app.route('/resume', methods=['GET'])
+        def resume_all_workers():
+            try:
+                ps_stt = self.funicorn_app.resume_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/idle', methods=['GET'])
+        def idle_all_workers():
+            try:
+                ps_stt = self.funicorn_app.idle_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/terminate', methods=['GET'])
+        def terminate_all_workers():
+            try:
+                ps_stt = self.funicorn_app.terminate_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/restart', methods=['GET'])
+        def restart_all_workers():
+            try:
+                ps_stt = self.funicorn_app.restart_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
         # End of API
         return app
 
