@@ -26,33 +26,8 @@ DEFAULT_BATCH_TIMEOUT = 0.01
 
 # mp = multiprocessing.get_context("spawn") # Error on Server
 
-__all__ = ['FunicornModel', 'Funicorn']
+__all__ = ['Funicorn']
 Task = namedtuple('Task', ['request_id', 'data'])
-
-
-class FunicornModel():
-    '''Experimental'''
-
-    def __init__(self, gpu_id, *args, **kwargs):
-        self._gpu_id = gpu_id
-        self.init_gpu_devices()
-        self.init_model(gpu_id, *args, **kwargs)
-
-    def get_logger(self):
-        return get_logger()
-
-    def init_gpu_devices(self):
-        if self._gpu_id is not None:
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(self._gpu_id)
-        else:
-            # -1 means no cuda device to use
-            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
-    def init_model(self, gpu_id, *args, **kwargs):
-        raise NotImplementedError('`init_model` must be implemented')
-
-    def predict(self, data):
-        raise NotImplementedError('`predict` must be implemented')
 
 
 class BaseWorker():
@@ -71,16 +46,18 @@ class BaseWorker():
         self._pid = os.getpid()
         self._model = None
         self._debug = debug
-        self.logger = get_logger(coloring_worker_name('BASE-WORKER'), mode='debug' if self._debug else 'info')
+        self.logger = get_logger(coloring_worker_name(
+            'BASE-WORKER'), mode='debug' if self._debug else 'info')
 
     def _recv_request(self):
         raise NotImplementedError
 
     def _send_response(self, request_id, result):
         raise NotImplementedError
-    
+
     def _init_environ(self):
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # INFO messages are not printed 
+        # INFO messages are not printed
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
     def run_once(self):
         # Get data from queue
@@ -147,7 +124,8 @@ class Worker(BaseWorker):
         ''' Init process parameters
             Every param initialized here are seperable among processes
         '''
-        self.logger = get_logger(f'{coloring_worker_name(f"WORKER-{worker_id}")}', mode='debug' if self._debug else 'info')
+        self.logger = get_logger(
+            coloring_worker_name(f'WORKER-{worker_id}'), mode='debug' if self._debug else 'info')
         self._init_environ()
         self._wrk_queue = wrk_queue or self._input_queue
         self._worker_id = worker_id
@@ -168,15 +146,18 @@ class Worker(BaseWorker):
 
 
 class Funicorn():
-    def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=10,
+    def __init__(self, model_cls=None, num_workers=0, batch_size=1, batch_timeout=10,
                  max_queue_size=1000,
                  http_host=None, http_port=5000, http_threads=30,
                  rpc_host=None, rpc_port=5001, rpc_threads=30,
                  gpu_devices=None,
-                model_init_kwargs=None, debug=False):
-
-        self.logger = get_logger(coloring_funicorn_name(), mode='debug' if debug else 'info')
+                 model_init_kwargs=None, debug=False, timeout=5000):
+        self.model_cls = model_cls
+        self.logger = get_logger(
+            coloring_funicorn_name(), mode='debug' if debug else 'info')
         self._model_init_kwargs = model_init_kwargs or {}
+        self.timeout = timeout
+        self.debug = debug
 
         self.http_host = http_host
         self.http_port = http_port
@@ -191,11 +172,12 @@ class Funicorn():
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
         self._input_queue = Queue(maxsize=max_queue_size)
-        # self._input_queue = mp.Manager().Queue(maxsize=max_queue_size) # Much slower
         self._result_dict = mp.Manager().dict()
-        self._wrk = Worker(model_cls, self._input_queue, self._result_dict,
+
+        self._wrk = Worker(self.model_cls, self._input_queue, self._result_dict,
                            batch_size=batch_size, batch_timeout=batch_timeout/1000,
                            model_init_kwargs=model_init_kwargs)
+
         self.pid = os.getpid()
         self._init_stat()
 
@@ -203,6 +185,19 @@ class Funicorn():
         self.wrk_ready_events = []
         self.wrk_destroy_events = []
         self.queue_ps = []
+        self.http = None
+        self.rpc = None
+
+        if self.http_host:
+            self.http = self.init_http_server(funicorn_app=self,
+                                              host=self.http_host, port=self.http_port,
+                                              stat=self.stat, threads=self.rpc_threads,
+                                              timeout=self.timeout, debug=self.debug)
+        if self.rpc_host:
+            self.rpc = self.init_rpc_server(funicorn_app=self,
+                                            host=self.rpc_host, port=self.rpc_port,
+                                            stat=self.stat, threads=self.rpc_threads,
+                                            timeout=self.timeout, debug=self.debug)
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
@@ -211,40 +206,55 @@ class Funicorn():
         self.stat = Statistic(num_workers=self.num_workers)
         self.stat.update({'parent_pid': self.pid})
 
-    def _init_rpc_server(self):
-        self._rpc = ThriftAPI(funicorn=self,
-                              host=self.rpc_host, port=self.rpc_port,
-                              stat=self.stat,
-                              threads=self.rpc_threads)
-        self._rpc.start()
+    def init_rpc_server(self, funicorn_app, host, port, stat=None,
+                        threads=40, timeout=1000, debug=False):
+        rpc = ThriftAPI(funicorn_app=funicorn_app,
+                        host=host, port=port,
+                        stat=stat, threads=threads,
+                        timeout=timeout,
+                        debug=debug)
+        return rpc
 
-    def _init_http_server(self):
-        self._http = HttpApi(funicorn=self, host=self.http_host,
-                             port=self.http_port, stat=self.stat,
-                             threads=self.http_threads)
-        self._http.start()
+    def init_http_server(self, funicorn_app, host, port, stat=None,
+                         threads=40, timeout=1000, debug=False):
+        http = HttpApi(funicorn_app=funicorn_app,
+                       host=host, port=port,
+                       stat=stat, threads=threads,
+                       timeout=timeout,
+                       debug=debug)
+        return http
+
+    def _init_connections(self):
+        if self.http is not None:
+            self.http.start()
+
+        if self.rpc is not None:
+            self.rpc.start()
 
     def _init_all_workers(self):
-        for idx in range(self.num_workers):
-            ready_event = mp.Event()
-            destroy_event = mp.Event()
-            args = (ready_event, destroy_event)
+        if self.model_cls is None:
+            self.logger.warning('Cannot start workers because model class is not provided!')
+        else:
+            for idx in range(self.num_workers):
+                ready_event = mp.Event()
+                destroy_event = mp.Event()
+                args = (ready_event, destroy_event)
 
-            if self.gpu_devices is not None:
-                gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
-            else:
-                gpu_id = -1
+                if self.gpu_devices is not None:
+                    gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
+                else:
+                    gpu_id = -1
 
-            wrk_queue = mp.Queue()
-            args = (idx, gpu_id, ready_event, destroy_event, wrk_queue)
-            wrk = mp.Process(target=self._wrk.run, args=args,
-                             daemon=True,
-                             name=f'funicorn-worker-{idx}')
-            wrk.start()
-            self.wrk_ps.append(wrk)
-            self.wrk_ready_events.append(ready_event)
-            self.wrk_destroy_events.append(destroy_event)
-            self.queue_ps.append(wrk_queue)
+                wrk_queue = mp.Queue()
+                args = (idx, gpu_id, ready_event, destroy_event, wrk_queue)
+                wrk = mp.Process(target=self._wrk.run, args=args,
+                                daemon=True,
+                                name=f'funicorn-worker-{idx}')
+                wrk.start()
+                self.wrk_ps.append(wrk)
+                self.wrk_ready_events.append(ready_event)
+                self.wrk_destroy_events.append(destroy_event)
+                self.queue_ps.append(wrk_queue)
 
     def _wait_for_worker_and_serve(self, timeout=WORKER_TIMEOUT):
         # wait for all workers finishing init
@@ -258,13 +268,11 @@ class Funicorn():
 
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
-
         # Distribute task to wrk_queue
         input_queue = self.queue_ps[randint(0, len(self.queue_ps) - 1)]
         input_queue.put(Task(request_id=request_id, data=data))
-        # self._input_queue.put(Task(request_id=request_id, data=data))
-        self.logger.info(
-            f'Received data with request_id: {request_id}')
+
+        self.logger.info(f'Received data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
@@ -290,10 +298,17 @@ class Funicorn():
         self.logger.info(f'Sent result with request_id: {request_id}')
         return ret
 
-    def destroy_all_worker(self):
-        '''Destroy all workers'''
+    def terminate_all_worker(self):
+        '''Terminate all workers'''
         for destroy_event in self.wrk_destroy_events:
             destroy_event.set()
+
+    def idle_all_worker(self):
+        '''Idle all workers'''
+        pass
+
+    def restart_all_worker(self):
+        pass
 
     def check_all_worker(self):
         '''Check status of all workers. Restart them if necessary'''
@@ -303,12 +318,15 @@ class Funicorn():
         self.logger.info("Ping!")
         return
 
-    def serve(self):    
-        self._init_all_workers()        
+    def _recheck_all_modules(self):
+        if not self.rpc and not self.http and not self.model_cls:
+            self.logger.error("Nothing is running. STOP!")
+            exit()
+
+    def serve(self):
+        self._init_all_workers()
         self._wait_for_worker_and_serve()
-        if self.http_host:
-            self._init_http_server()
-        if self.rpc_host:
-            self._init_rpc_server()
+        self._init_connections()
+        self._recheck_all_modules()
         while True:
             time.sleep(300)

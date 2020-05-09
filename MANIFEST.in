@@ -1,1 +1,2 @@
 include requirements.txt README.md
+include assets/funicorn.thrift

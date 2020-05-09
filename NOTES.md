@@ -1,24 +1,20 @@
 ## Worker
-
-* [ x ] add batch aggregation
-* [ x ] add logger for funicorn
-* [ - ] add logger for funicorn workers (multiprocess)
+* [ x ] Add logger for Workers
+* [ - ] HTTP logger
+* [ x ] Add batch aggregation
 * [ - ] Support email alert
 * [ - ] Distribute, Data Steam using Redis, RabbitMQ
-* [ - ] HTTP logger
-* [ x ] Models Initialization
-* [ - ] support TCP connections
+* [ x ] Multi-processes/models initialization
 * [ x ] Get subprocess id and theirs status
 
 ## Connection
-
-* [ x ] support RPC 
+* [ x ] support RPC/TCP connections
 * [ x ] support HTTP request
 
 ## API
 
-* [ x ] check service status
-* [ x ] get service process status
+* [ x ] Check service status
+* [ x ] Get service process status
 * [ - ] Web UI
 * [ - ] Statistic GUI
 
@@ -30,3 +26,7 @@
 * [ - ] Restart Workers
 * [ - ] Idle Workers
 * [ x ] Start Funicorn Service
+
+## MISC
+* [ x ] Colored logger
+* [ - ] Centralize Config
