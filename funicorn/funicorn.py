@@ -101,10 +101,6 @@ class BaseWorker():
         '''Loop into a queue'''
         while True:
             try:
-                if self._idle_event and self._idle_event.is_set():
-                    time.sleep(0.5)
-                    continue
-
                 handled = self.run_once()
                 if self._ready_event and not self._ready_event.is_set() and (self._wrk_queue.qsize() == 0):
                     self.logger.info('All jobs have been done. Terminated')
@@ -351,16 +347,12 @@ class Funicorn():
         '''Idle all workers'''
         self.logger.info(
             'Received IDLE signal. All workers will idle until receiving resume signal')
-        # for worker_info in self.wrk_ps:
-        #     worker_info.idle_event.set()
         self.idle_event.set()
         return 'All workers are idling!'
 
     def resume_all_workers(self):
         self.logger.info(
             'Received RESUME signal. All workers will idle until receiving resume signal')
-        # for worker_info in self.wrk_ps:
-        #     worker_info.idle_event.clear()
         self.idle_event.clear() 
         return 'All workers are resuming!'
 

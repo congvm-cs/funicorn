@@ -58,8 +58,9 @@ def add_options(options):
 @add_options(common_options)
 def terminate(host, port):
     url = f'http://{host}:{port}/terminate'
+    print('> Waiting for terminate to complete...')
     stt = cli_requests(url)
-    print(stt)
+    print('> ' + stt)
 
 
 @click.command()
@@ -67,7 +68,7 @@ def terminate(host, port):
 def idle(host, port):
     url = f'http://{host}:{port}/idle'
     stt = cli_requests(url)
-    print(stt)
+    print('> ' + stt)
 
 
 @click.command()
@@ -75,15 +76,16 @@ def idle(host, port):
 def resume(host, port):
     url = f'http://{host}:{port}/resume'
     stt = cli_requests(url)
-    print(stt)
+    print('> ' + stt)
 
 
 @click.command()
 @add_options(common_options)
 def restart(host, port):
     url = f'http://{host}:{port}/restart'
+    print('> Waiting for restart to complete...')
     stt = cli_requests(url)
-    print(stt)
+    print('> ' + stt)
 
 
 # @click.group()
