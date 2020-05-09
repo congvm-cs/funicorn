@@ -15,7 +15,9 @@ common_options = [
 ]
 
 funicorn_options = [
-    click.option('--model-cls', type=str, required=True,
+    click.option('--funicorn-cls', type=str, default=None,
+                 help='Model class to use'),
+    click.option('--model-cls', type=str, default=None,
                  help='Model class to use'),
     click.option('--num-workers', type=int, default=1,
                  help='A number of workers'),
@@ -67,26 +69,40 @@ def idle(host, port):
 # @click.group()
 @click.command(context_settings=CONTEXT_SETTINGS)
 @add_options(funicorn_options)
-def start(model_cls, num_workers=1, batch_size=1, batch_timeout=10,
+def start(funicorn_cls=None, model_cls=None, num_workers=1, batch_size=1, batch_timeout=10,
           max_queue_size=1000,
           http_host=None, http_port=5000, http_threads=30,
           rpc_host=None, rpc_port=5001, rpc_threads=30,
-          gpu_devices=None, model_init_kwargs=None, debug=False):
+          gpu_devices=None, model_init_kwargs=None, debug=False):   
     
+    # Append current working directory to search module
     sys.path.append(os.getcwd())
-    subpaths = model_cls.split('.')
-    if len(subpaths) > 2:
-        pkg, model_cls_name = subpaths[-2:]
-    else:
-        pkg, model_cls_name = subpaths
-    model_cls = getattr(importlib.import_module(pkg), model_cls_name)
 
-    if model_init_kwargs:
-        model_init_kwargs = dict(kwarg.split(':') for kwarg in model_init_kwargs)
+    if funicorn_cls is None:
+        funicorn_cls = Funicorn
+    else:
+        subpaths = funicorn_cls.split('.')
+        if len(subpaths) > 2:
+            pkg, funicorn_cls_name = subpaths[-2:]
+        else:
+            pkg, funicorn_cls_name = subpaths
+        funicorn_cls = getattr(importlib.import_module(pkg), funicorn_cls_name)
+    
+    if model_cls is not None:
+        subpaths = model_cls.split('.')
+        if len(subpaths) > 2:
+            pkg, model_cls_name = subpaths[-2:]
+        else:
+            pkg, model_cls_name = subpaths
+        model_cls = getattr(importlib.import_module(pkg), model_cls_name)
+
+        if model_init_kwargs:
+            model_init_kwargs = dict(kwarg.split(':') for kwarg in model_init_kwargs)
 
     if gpu_devices:
         gpu_devices = [gpu_id for gpu_id in gpu_devices.split(',') if gpu_id != '']
-    funicorn_service = Funicorn(model_cls, num_workers, batch_size, batch_timeout,
+
+    funicorn_service = funicorn_cls(model_cls, num_workers, batch_size, batch_timeout,
                                 max_queue_size,
                                 http_host, http_port, http_threads,
                                 rpc_host, rpc_port, rpc_threads,

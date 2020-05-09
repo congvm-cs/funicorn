@@ -13,6 +13,7 @@ import numpy as np
 
 #--------------------- Image Encode/Decode ---------------------#
 
+
 def img_bytes_to_img_arr(img_bytes):
     img_flatten = np.frombuffer(img_bytes, dtype=np.uint8)
     img_arr_decoded = cv2.imdecode(img_flatten, cv2.IMREAD_ANYCOLOR)
@@ -42,6 +43,7 @@ def check_ps_status(pid):
 
 #--------------------- Logger ---------------------#
 
+
 MAPPING = {
     'DEBUG': 37,  # white
     'INFO': 36,  # cyan
@@ -66,6 +68,7 @@ class ColoredFormatter(Formatter):
         record.levelname = colored_levelname
         return Formatter.format(self, record)
 
+
 def get_logger(name=f'logger-{str(uuid.uuid4())}', mode='debug'):
     logger = logging.getLogger(name)
     # https://stackoverflow.com/questions/17745914/python-logging-module-is-printing-lines-multiple-times
@@ -78,11 +81,14 @@ def get_logger(name=f'logger-{str(uuid.uuid4())}', mode='debug'):
         logger.setLevel(logging.DEBUG if mode == 'debug' else logging.INFO)
     return logger
 
+
 def coloring_worker_name(worker_name):
     return colored(worker_name, 'green', attrs=['bold'])
 
-def coloring_funicorn_name():
-    return colored('FUNICORN', 'cyan', attrs=['bold'])
+
+def coloring_funicorn_name(funicorn_app_name='FUNICORN'):
+    return colored(funicorn_app_name, 'cyan', attrs=['bold'])
+
 
 def coloring_network_name(network_name):
     return colored(network_name, 'blue', attrs=['bold'])
