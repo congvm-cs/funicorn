@@ -12,6 +12,7 @@ from queue import Empty
 from queue import Queue
 from .exceptions import LengthEqualtyError
 from .utils import get_logger, img_bytes_to_img_arr
+from .utils import coloring_worker_name, coloring_funicorn_name
 from .stat import Statistic
 
 from .flaskorn import HttpApi
@@ -69,19 +70,23 @@ class BaseWorker():
         self._destroy_event = destroy_event
         self._pid = os.getpid()
         self._model = None
-        self._logger = get_logger(mode='debug' if debug else 'info')
+        self._debug = debug
+        self.logger = get_logger(coloring_worker_name('BASE-WORKER'), mode='debug' if self._debug else 'info')
 
     def _recv_request(self):
         raise NotImplementedError
 
     def _send_response(self, request_id, result):
         raise NotImplementedError
+    
+    def _init_environ(self):
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # INFO messages are not printed 
 
     def run_once(self):
         # Get data from queue
         batch = []
         start_time = time.time()
-        for idx in range(self.batch_size):
+        for _ in range(self.batch_size):
             try:
                 task = self._recv_request()
             except TimeoutError:
@@ -104,8 +109,8 @@ class BaseWorker():
             'Length of result and batch must be equal')
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
-        self._logger.info(
-            f'[Worker-{self._worker_id}] Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}\
+        self.logger.info(
+            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}\
                  - model-time: {end_model_time - start_model_time}')
         # Return None or something to notify number of data in queue
         return batch_size
@@ -120,7 +125,7 @@ class BaseWorker():
                 if not handled:
                     time.sleep(RESULT_TIMEOUT)
             except Exception as e:
-                self._logger.error(e)
+                self.logger.error(e)
 
 
 class Worker(BaseWorker):
@@ -128,7 +133,7 @@ class Worker(BaseWorker):
         try:
             start_time = time.time()
             task = self._wrk_queue.get(timeout=self.batch_timeout)
-            self._logger.info(
+            self.logger.info(
                 f'[_recv_request] get from queue {time.time() - start_time}')
         except Empty:
             raise TimeoutError
@@ -142,11 +147,15 @@ class Worker(BaseWorker):
         ''' Init process parameters
             Every param initialized here are seperable among processes
         '''
+        self.logger = get_logger(f'{coloring_worker_name(f"WORKER-{worker_id}")}', mode='debug' if self._debug else 'info')
+        self._init_environ()
         self._wrk_queue = wrk_queue or self._input_queue
         self._worker_id = worker_id
         self._pid = os.getpid()
         self._model_init_kwargs.update({'gpu_id': gpu_id})
-        self._logger.info(f'[Worker-{self._worker_id}] Init Model...')
+
+        device = f'GPU-{gpu_id}' if gpu_id else 'CPU'
+        self.logger.info(f'Initializing model in {device}')
         self._model = self._model_cls(**self._model_init_kwargs)
 
         if ready_event:
@@ -166,7 +175,7 @@ class Funicorn():
                  gpu_devices=None,
                 model_init_kwargs=None, debug=False):
 
-        self._logger = get_logger(mode='debug' if debug else 'info')
+        self.logger = get_logger(coloring_funicorn_name(), mode='debug' if debug else 'info')
         self._model_init_kwargs = model_init_kwargs or {}
 
         self.http_host = http_host
@@ -242,9 +251,9 @@ class Funicorn():
         for (i, e) in enumerate(self.wrk_ready_events):
             # todo: select all events with timeout
             is_ready = e.wait(timeout)
-            self._logger.info("[Worker-%d] ready state: %s" % (i, is_ready))
+            self.logger.info("[WORKER-%d] ready state: %s" % (i, is_ready))
             if not is_ready:
-                self._logger.error("[Worker-%d] cannot start. EXIT!" % (i))
+                self.logger.error("[WORKER-%d] cannot start. EXIT!" % (i))
                 exit()
 
     def predict(self, data, asynchronous=False):
@@ -254,8 +263,8 @@ class Funicorn():
         input_queue = self.queue_ps[randint(0, len(self.queue_ps) - 1)]
         input_queue.put(Task(request_id=request_id, data=data))
         # self._input_queue.put(Task(request_id=request_id, data=data))
-        self._logger.info(
-            f'[Funicorn] Request data with request_id: {request_id}')
+        self.logger.info(
+            f'Received data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
@@ -264,7 +273,7 @@ class Funicorn():
     def predict_img_bytes(self, img_bytes):
         start_time = time.time()
         img_arr = img_bytes_to_img_arr(img_bytes)
-        self._logger.info(
+        self.logger.info(
             f'[img_bytes_to_img_arr] process-time: {time.time() - start_time}')
         json_result = self.predict(img_arr)
         if isinstance(json_result, str) or isinstance(json_result, dict):
@@ -278,7 +287,7 @@ class Funicorn():
             if ret is not None:
                 break
             time.sleep(RESULT_TIMEOUT)
-        self._logger.info(f'[Funicorn] Received with request_id: {request_id}')
+        self.logger.info(f'Sent result with request_id: {request_id}')
         return ret
 
     def destroy_all_worker(self):
@@ -291,7 +300,7 @@ class Funicorn():
         pass
 
     def ping(self):
-        self._logger.info("[Funicorn] Ping!")
+        self.logger.info("Ping!")
         return
 
     def serve(self):    

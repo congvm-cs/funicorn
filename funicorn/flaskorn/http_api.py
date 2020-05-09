@@ -10,7 +10,7 @@ import traceback
 
 
 from ..exceptions import NotSupportedInputFile, MaxFileSizeExeeded
-from ..utils import get_logger
+from ..utils import get_logger, coloring_network_name
 from ..utils import check_all_ps_status
 
 class HttpApi(threading.Thread):
@@ -23,7 +23,7 @@ class HttpApi(threading.Thread):
         self.app = self.create_app()
         self.funicorn = funicorn
         self.stat = stat
-        self.logger = get_logger(mode='debug' if debug else 'info')
+        self.logger = get_logger(coloring_network_name('HTTP'), mode='debug' if debug else 'info')
 
     def create_app(self):
         app = Flask(__name__)
@@ -53,7 +53,7 @@ class HttpApi(threading.Thread):
             return resp
 
         @app.errorhandler(HTTPStatus.NOT_FOUND)
-        def wrong_request_params(error):
+        def not_found(error):
             resp = jsonify({
                 "error_code": HTTPStatus.NOT_FOUND,
                 "error_message": "Api Not Found",

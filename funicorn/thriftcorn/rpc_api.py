@@ -13,11 +13,11 @@ class ThriftAPI(threading.Thread):
         self.stat = stat
         self.threads = threads
         self.debug = debug
-        self.logger = get_logger(mode='debug' if debug else 'info')
+        self.logger = get_logger('RPC', mode='debug' if debug else 'info')
         threading.Thread.__init__(self, daemon=daemon)
         
     def run(self):
-        self.logger.info(f'RPC Server is starting at http://{self.host}:{self.port}')
+        self.logger.info(f'RPC Server is running at http://{self.host}:{self.port}')
         processors = Processor(self.funicorn)
         socket = TSocket.TServerSocket(host=self.host, port=self.port)
         prot_fac = TBinaryProtocol.TBinaryProtocolFactory()

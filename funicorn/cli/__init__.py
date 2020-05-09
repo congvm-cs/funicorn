@@ -2,6 +2,8 @@ import click
 from ..funicorn import Funicorn
 from ..utils import get_args_from_class
 import importlib
+import os
+import sys
 
 CONTEXT_SETTINGS = {'show_default': True}
 
@@ -70,6 +72,8 @@ def start(model_cls, num_workers=1, batch_size=1, batch_timeout=10,
           http_host=None, http_port=5000, http_threads=30,
           rpc_host=None, rpc_port=5001, rpc_threads=30,
           gpu_devices=None, model_init_kwargs=None, debug=False):
+    
+    sys.path.append(os.getcwd())
     subpaths = model_cls.split('.')
     if len(subpaths) > 2:
         pkg, model_cls_name = subpaths[-2:]
