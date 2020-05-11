@@ -3,20 +3,22 @@ from thrift.protocol import TBinaryProtocol
 from thrift.transport import TSocket, TTransport
 from .FunicornService import Processor
 import threading
-from ..utils import get_logger
+from ..utils import get_logger, coloring_network_name
 
 
 class ThriftAPI(threading.Thread):
-    def __init__(self, funicorn_app, host, port, stat=None, threads=40,
+    def __init__(self, funicorn_app, host, port, name='RPC', stat=None, threads=40,
                  timeout=1000, debug=False):
+        threading.Thread.__init__(self, daemon=True)
+        self.name = name
         self.funicorn_app = funicorn_app
         self.host = host
         self.port = port
         self.stat = stat
         self.threads = threads
         self.debug = debug
-        self.logger = get_logger('RPC', mode='debug' if debug else 'info')
-        threading.Thread.__init__(self, daemon=True)
+        self.logger = get_logger(coloring_network_name('RPC'), mode='debug' if debug else 'info')
+        self.funicorn_app.register_connection(self)
 
     def init_connection(self, processor):
         '''
@@ -48,5 +50,5 @@ class ThriftAPI(threading.Thread):
         processor = self.init_processor(self.funicorn_app)
         server = self.init_connection(processor)
         self.logger.info(
-            f'RPC Server is running at http://{self.host}:{self.port}')
+            f'Server is running at http://{self.host}:{self.port}')
         server.serve()

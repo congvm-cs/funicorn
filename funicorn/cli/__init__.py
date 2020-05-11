@@ -1,6 +1,9 @@
 import requests
 import click
 from ..funicorn import Funicorn
+from ..flaskorn import HttpApi
+from ..thriftcorn import ThriftAPI
+from ..stat import Statistic
 from ..utils import get_args_from_class
 import importlib
 import os
@@ -20,6 +23,10 @@ funicorn_app_options = [
                  help='Model class to use'),
     click.option('--model-cls', type=str, default=None,
                  help='Model class to use'),
+    click.option('--http-cls', type=str, default=None,
+                 help='Model class to use'),
+    click.option('--rpc-cls', type=str, default=None,
+                 help='Model class to use'),
     click.option('--num-workers', type=int, default=1,
                  help='A number of workers'),
     click.option('--batch-size', type=int, default=1,
@@ -31,8 +38,8 @@ funicorn_app_options = [
     click.option('--http-host', type=str, default='0.0.0.0', help='HTTP host'),
     click.option('--http-port', type=int, default=5000, help='HTTP port'),
     click.option('--http-threads', type=int, default=10, help='HTTP threads'),
-    click.option('--rpc-host', type=str, default=None, help='RPC host'),
-    click.option('--rpc-port', type=int, default=5006, help='RPC port'),
+    click.option('--rpc-host', type=str, default='0.0.0.0', help='RPC host'),
+    click.option('--rpc-port', type=int, default=None, help='RPC port'),
     click.option('--rpc-threads', type=int, default=10,
                  help='A number of RPC threads'),
     click.option('--gpu-devices', type=str, default=None, help='GPU devices'),
@@ -56,7 +63,7 @@ def add_options(options):
 
 @click.command()
 @add_options(common_options)
-def terminate(host, port):
+def worker_terminate(host, port):
     url = f'http://{host}:{port}/terminate'
     print('> Waiting for terminate to complete...')
     stt = cli_requests(url)
@@ -65,7 +72,7 @@ def terminate(host, port):
 
 @click.command()
 @add_options(common_options)
-def idle(host, port):
+def worker_idle(host, port):
     url = f'http://{host}:{port}/idle'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -73,7 +80,7 @@ def idle(host, port):
 
 @click.command()
 @add_options(common_options)
-def resume(host, port):
+def worker_resume(host, port):
     url = f'http://{host}:{port}/resume'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -81,21 +88,30 @@ def resume(host, port):
 
 @click.command()
 @add_options(common_options)
-def restart(host, port):
+def worker_restart(host, port):
     url = f'http://{host}:{port}/restart'
     print('> Waiting for restart to complete...')
     stt = cli_requests(url)
     print('> ' + stt)
 
 
+def split_class_from_path(path):
+    subpaths = path.split('.')
+    if len(subpaths) > 2:
+        pkg, cls_name = subpaths[-2:]
+    else:
+        pkg, cls_name = subpaths
+    cls_name = getattr(importlib.import_module(pkg), cls_name)
+    return pkg, cls_name
+
 # @click.group()
 @click.command(context_settings=CONTEXT_SETTINGS)
 @add_options(funicorn_app_options)
-def start(funicorn_cls=None, model_cls=None, num_workers=0,
-          batch_size=1, batch_timeout=10,
+def start(funicorn_cls=None, model_cls=None, http_cls=None, rpc_cls=None,
+          num_workers=0, batch_size=1, batch_timeout=10,
           max_queue_size=1000,
-          http_host=None, http_port=5000, http_threads=30,
-          rpc_host=None, rpc_port=5001, rpc_threads=30,
+          http_host='0.0.0.0', http_port=5000, http_threads=30,
+          rpc_host='0.0.0.0', rpc_port=None, rpc_threads=30,
           gpu_devices=None, model_init_kwargs=None, debug=False):
 
     # Append current working directory to search module
@@ -104,20 +120,12 @@ def start(funicorn_cls=None, model_cls=None, num_workers=0,
     if funicorn_cls is None:
         funicorn_cls = Funicorn
     else:
-        subpaths = funicorn_cls.split('.')
-        if len(subpaths) > 2:
-            pkg, funicorn_cls_name = subpaths[-2:]
-        else:
-            pkg, funicorn_cls_name = subpaths
-        funicorn_cls = getattr(importlib.import_module(pkg), funicorn_cls_name)
+        pkg, funicorn_cls = split_class_from_path(funicorn_cls)
+        # funicorn_cls = getattr(importlib.import_module(pkg), funicorn_cls_name)
 
     if model_cls is not None:
-        subpaths = model_cls.split('.')
-        if len(subpaths) > 2:
-            pkg, model_cls_name = subpaths[-2:]
-        else:
-            pkg, model_cls_name = subpaths
-        model_cls = getattr(importlib.import_module(pkg), model_cls_name)
+        pkg, model_cls = split_class_from_path(model_cls)
+        # model_cls = getattr(importlib.import_module(pkg), model_cls_name)
 
         if model_init_kwargs:
             model_init_kwargs = dict(kwarg.split(':')
@@ -127,9 +135,38 @@ def start(funicorn_cls=None, model_cls=None, num_workers=0,
         gpu_devices = [
             gpu_id for gpu_id in gpu_devices.split(',') if gpu_id != '']
 
-    funicorn_service = funicorn_cls(model_cls, num_workers, batch_size, batch_timeout,
-                                    max_queue_size,
-                                    http_host, http_port, http_threads,
-                                    rpc_host, rpc_port, rpc_threads,
-                                    gpu_devices, model_init_kwargs, debug)
-    funicorn_service.serve()
+    funicorn_app = funicorn_cls(model_cls=model_cls,
+                                num_workers=num_workers,
+                                batch_size=batch_size,
+                                batch_timeout=batch_timeout,
+                                max_queue_size=max_queue_size,
+                                gpu_devices=gpu_devices,
+                                model_init_kwargs=model_init_kwargs,
+                                debug=debug)
+
+    stat = Statistic(num_workers=num_workers)
+
+    if (rpc_host and http_host) and (rpc_port == http_port):
+        raise ConnectionError('rpc_port and http_port must be different.')
+
+    if http_port:
+        if http_cls is not None:
+            pkg, http_cls = split_class_from_path(http_cls)
+            assert issubclass(http_cls, HttpApi)
+        else:
+            http_cls = HttpApi
+        http = http_cls(funicorn_app=funicorn_app, stat=stat,
+                        host=http_host, port=http_port,
+                        threads=rpc_threads,
+                        debug=debug)
+    if rpc_port:
+        if rpc_cls is not None:
+            pkg, rpc_cls = split_class_from_path(rpc_cls)
+            assert issubclass(rpc_cls, ThriftAPI)
+        else:
+            rpc_cls = ThriftAPI
+        rpc = rpc_cls(funicorn_app=funicorn_app, stat=stat,
+                      host=rpc_host, port=rpc_port,
+                      threads=rpc_threads,
+                      debug=debug)
+    funicorn_app.serve()

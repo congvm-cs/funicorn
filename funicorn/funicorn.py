@@ -13,7 +13,7 @@ from queue import Queue
 from collections import namedtuple
 from .exceptions import LengthEqualtyError
 from .utils import get_logger, img_bytes_to_img_arr
-from .utils import coloring_worker_name, coloring_funicorn_name
+from .utils import coloring_worker_name, coloring_funicorn_name, coloring_network_name
 from .stat import Statistic
 from .mqueue import Queue as MQueue
 from .flaskorn import HttpApi
@@ -140,7 +140,7 @@ class Worker(BaseWorker):
         self._model_init_kwargs.update({'gpu_id': gpu_id})
 
         device = f'GPU-{gpu_id}' if gpu_id else 'CPU'
-        self.logger.info(f'Initializing model in {device}')
+        self.logger.info(f'Initializing Worker in {device}')
         self._model = self._model_cls(**self._model_init_kwargs)
 
         if ready_event:
@@ -159,8 +159,6 @@ class Worker(BaseWorker):
 class Funicorn():
     def __init__(self, model_cls=None, num_workers=0, batch_size=1, batch_timeout=10,
                  max_queue_size=1000,
-                 http_host='0.0.0.0', http_port=5000, http_threads=30,
-                 rpc_host=None, rpc_port=5001, rpc_threads=30,
                  gpu_devices=None,
                  model_init_kwargs=None, debug=False, timeout=5000):
         self.model_cls = model_cls
@@ -170,16 +168,6 @@ class Funicorn():
         self.timeout = timeout
         self.debug = debug
 
-        self.http_host = http_host
-        self.http_port = http_port
-        self.http_threads = http_threads
-
-        self.rpc_host = rpc_host
-        self.rpc_port = rpc_port
-        self.rpc_threads = rpc_threads
-
-        if (self.rpc_host and self.http_host) and (self.rpc_port == self.http_port):
-            raise ConnectionError('rpc_port and http_port must be different.')
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
 
@@ -195,19 +183,11 @@ class Funicorn():
         self.idle_event = mp.Event()
         self.wrk_ps = []
 
-        self.http = None
-        self.rpc = None
+        self.connection_apps = []
 
-        if self.http_host:
-            self.http = self.init_http_server(funicorn_app=self,
-                                              host=self.http_host, port=self.http_port,
-                                              stat=self.stat, threads=self.rpc_threads,
-                                              timeout=self.timeout, debug=self.debug)
-        if self.rpc_host:
-            self.rpc = self.init_rpc_server(funicorn_app=self,
-                                            host=self.rpc_host, port=self.rpc_port,
-                                            stat=self.stat, threads=self.rpc_threads,
-                                            timeout=self.timeout, debug=self.debug)
+    def register_connection(self, connection):
+        self.logger.info(f'Register {coloring_network_name(connection.name)} connection')
+        self.connection_apps.append(connection)
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
@@ -235,53 +215,54 @@ class Funicorn():
         return http
 
     def _init_connections(self):
-        if self.http is not None:
-            self.http.start()
-
-        if self.rpc is not None:
-            self.rpc.start()
-
+        for conn in self.connection_apps:
+            conn.start()
+     
     def _init_all_workers(self):
         if self.model_cls is None:
             self.logger.warning(
-                'Cannot start workers because model class is not provided!')
+                    'Cannot start workers because model class is not provided!')
         else:
-            for idx in range(self.num_workers):
-                ready_event = mp.Event()
-                idle_event = mp.Event()
-                terminate_event = mp.Event()
-                args = (ready_event, terminate_event)
+            if self.num_workers <= 0:
+                self.logger.warning(
+                    'Cannot start workers because num workers is set to 0!')
+            else:
+                for idx in range(self.num_workers):
+                    ready_event = mp.Event()
+                    idle_event = mp.Event()
+                    terminate_event = mp.Event()
+                    args = (ready_event, terminate_event)
 
-                if self.gpu_devices is not None:
-                    gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
-                else:
-                    gpu_id = -1
+                    if self.gpu_devices is not None:
+                        gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
+                    else:
+                        gpu_id = None
 
-                wrk_queue = MQueue()  # mp.Queue()
-                args = (idx, gpu_id, ready_event, idle_event,
-                        terminate_event, wrk_queue)
-                wrk = mp.Process(target=self._wrk.run, args=args,
-                                 daemon=True,
-                                 name=f'funicorn-worker-{idx}')
-                wrk.start()
-                worker_info = WorkerInfo(wrk=wrk,
-                                         pid=wrk.pid,
-                                         gpu_id=gpu_id,
-                                         ps_status='unknown',
-                                         queue=wrk_queue,
-                                         ready_event=ready_event,
-                                         idle_event=idle_event,
-                                         terminate_event=terminate_event)
-                self.wrk_ps.append(worker_info)
+                    wrk_queue = MQueue()  # mp.Queue()
+                    args = (idx, gpu_id, ready_event, idle_event,
+                            terminate_event, wrk_queue)
+                    wrk = mp.Process(target=self._wrk.run, args=args,
+                                    daemon=True,
+                                    name=f'funicorn-worker-{idx}')
+                    wrk.start()
+                    worker_info = WorkerInfo(wrk=wrk,
+                                            pid=wrk.pid,
+                                            gpu_id=gpu_id,
+                                            ps_status='unknown',
+                                            queue=wrk_queue,
+                                            ready_event=ready_event,
+                                            idle_event=idle_event,
+                                            terminate_event=terminate_event)
+                    self.wrk_ps.append(worker_info)
 
     def _wait_for_worker(self, timeout=WORKER_TIMEOUT):
         # wait for all workers finishing init
         for (i, worker_info) in enumerate(self.wrk_ps):
             # todo: select all events with timeout
             is_ready = worker_info.ready_event.wait(timeout)
-            self.logger.info("[WORKER-%d] ready state: %s" % (i, is_ready))
+            self.logger.info(f"{coloring_worker_name(f'WORKER-{i}')} ready state: {is_ready}")
             if not is_ready:
-                self.logger.error("[WORKER-%d] cannot start. EXIT!" % (i))
+                self.logger.error(f"coloring_worker_name(f'WORKER-{i}') cannot start. EXIT!")
                 exit()
 
     def _start_task_distributations(self):
@@ -290,10 +271,6 @@ class Funicorn():
             task = self._input_queue.get()
             input_queue = self.wrk_ps[randint(0, len(self.wrk_ps) - 1)].queue
             input_queue.put(task)
-
-    # def _init_task_distribution(self):
-    #     threading.Thread(
-    #         target=self._start_task_distributations, daemon=True).start()
 
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
@@ -353,7 +330,7 @@ class Funicorn():
     def resume_all_workers(self):
         self.logger.info(
             'Received RESUME signal. All workers will idle until receiving resume signal')
-        self.idle_event.clear() 
+        self.idle_event.clear()
         return 'All workers are resuming!'
 
     def restart_all_workers(self):
@@ -374,7 +351,7 @@ class Funicorn():
         return
 
     def _recheck_all_modules(self):
-        if not self.rpc and not self.http and not self.model_cls:
+        if len(self.connection_apps) == 0 and not self.model_cls:
             self.logger.error("Nothing is running. STOP!")
             exit()
 
