@@ -21,10 +21,10 @@
 ## CLI
 
 * [ x ] Add CLI
-* [ - ] Terminate Workers
+* [ x ] Terminate Workers
 * [ - ] Add more Worker with specific GPU_ID
-* [ - ] Restart Workers
-* [ - ] Idle Workers
+* [ x ] Restart Workers
+* [ x ] Idle Workers
 * [ x ] Start Funicorn Service
 
 ## MISC

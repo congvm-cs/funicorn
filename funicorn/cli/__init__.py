@@ -48,8 +48,11 @@ funicorn_app_options = [
 ]
 
 
-def cli_requests(url):
-    resp = requests.get(url, timeout=1000)
+def cli_requests(url, method='get', params=None):
+    if method == 'get':
+        resp = requests.get(url, params=params, timeout=1000)
+    elif method == 'post':
+        resp = requests.post(url, timeout=1000)
     return resp.json()
 
 
@@ -94,6 +97,18 @@ def worker_restart(host, port):
     stt = cli_requests(url)
     print('> ' + stt)
 
+@click.command()
+@add_options(common_options)
+@click.option('--num-workers', type=int, default=0, show_default=True,
+                 help='Additional num workers')
+@click.option('--gpu-devices', type=str, default=None, show_default=True, help='GPU devices')
+def add_workers(host, port, num_workers, gpu_devices):
+    url = f'http://{host}:{port}/add_workers'
+    print('> Add more workers...')
+    params = {'num_workers': num_workers, 'gpu_devices': gpu_devices}
+    stt = cli_requests(url, params=params)
+    print('> ' + stt)
+
 
 def split_class_from_path(path):
     subpaths = path.split('.')
@@ -104,7 +119,6 @@ def split_class_from_path(path):
     cls_name = getattr(importlib.import_module(pkg), cls_name)
     return pkg, cls_name
 
-# @click.group()
 @click.command(context_settings=CONTEXT_SETTINGS)
 @add_options(funicorn_app_options)
 def start(funicorn_cls=None, model_cls=None, http_cls=None, rpc_cls=None,
@@ -120,12 +134,10 @@ def start(funicorn_cls=None, model_cls=None, http_cls=None, rpc_cls=None,
     if funicorn_cls is None:
         funicorn_cls = Funicorn
     else:
-        pkg, funicorn_cls = split_class_from_path(funicorn_cls)
-        # funicorn_cls = getattr(importlib.import_module(pkg), funicorn_cls_name)
+        pkg, funicorn_cls = split_class_from_path(funicorn_cls)    
 
     if model_cls is not None:
         pkg, model_cls = split_class_from_path(model_cls)
-        # model_cls = getattr(importlib.import_module(pkg), model_cls_name)
 
         if model_init_kwargs:
             model_init_kwargs = dict(kwarg.split(':')

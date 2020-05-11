@@ -30,6 +30,7 @@ setup(
                             'funicorn-worker-idle=funicorn.cli:worker_idle',
                             'funicorn-worker-resume=funicorn.cli:worker_resume',
                             'funicorn-worker-restart=funicorn.cli:worker_restart',
+                            'funicorn-worker-add=funicorn.cli:add_workers',
                             ],
     }
 )

@@ -29,7 +29,7 @@ DEFAULT_BATCH_TIMEOUT = 0.01
 
 __all__ = ['Funicorn']
 Task = namedtuple('Task', ['request_id', 'data'])
-WorkerInfo = namedtuple('WorkerInfo', ['wrk', 'pid', 'gpu_id',
+WorkerInfo = namedtuple('WorkerInfo', ['wrk', 'wrk_id', 'pid', 'gpu_id',
                                        'ps_status', 'queue',
                                        'ready_event', 'idle_event', 'terminate_event'])
 
@@ -168,6 +168,7 @@ class Funicorn():
         self.timeout = timeout
         self.debug = debug
 
+        self._lock = threading.Lock()
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
 
@@ -182,7 +183,6 @@ class Funicorn():
         self._init_stat()
         self.idle_event = mp.Event()
         self.wrk_ps = []
-
         self.connection_apps = []
 
     def register_connection(self, connection):
@@ -227,49 +227,24 @@ class Funicorn():
                 self.logger.warning(
                     'Cannot start workers because num workers is set to 0!')
             else:
-                for idx in range(self.num_workers):
-                    ready_event = mp.Event()
-                    idle_event = mp.Event()
-                    terminate_event = mp.Event()
-                    args = (ready_event, terminate_event)
-
-                    if self.gpu_devices is not None:
-                        gpu_id = self.gpu_devices[idx % len(self.gpu_devices)]
-                    else:
-                        gpu_id = None
-
-                    wrk_queue = MQueue()  # mp.Queue()
-                    args = (idx, gpu_id, ready_event, idle_event,
-                            terminate_event, wrk_queue)
-                    wrk = mp.Process(target=self._wrk.run, args=args,
-                                    daemon=True,
-                                    name=f'funicorn-worker-{idx}')
-                    wrk.start()
-                    worker_info = WorkerInfo(wrk=wrk,
-                                            pid=wrk.pid,
-                                            gpu_id=gpu_id,
-                                            ps_status='unknown',
-                                            queue=wrk_queue,
-                                            ready_event=ready_event,
-                                            idle_event=idle_event,
-                                            terminate_event=terminate_event)
-                    self.wrk_ps.append(worker_info)
+                self.add_worker(self.num_workers, self.gpu_devices)
 
     def _wait_for_worker(self, timeout=WORKER_TIMEOUT):
         # wait for all workers finishing init
         for (i, worker_info) in enumerate(self.wrk_ps):
             # todo: select all events with timeout
             is_ready = worker_info.ready_event.wait(timeout)
-            self.logger.info(f"{coloring_worker_name(f'WORKER-{i}')} ready state: {is_ready}")
+            self.logger.info(f"{coloring_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
             if not is_ready:
-                self.logger.error(f"coloring_worker_name(f'WORKER-{i}') cannot start. EXIT!")
+                self.logger.error(f"coloring_worker_name(f'WORKER-{worker_info.wrk_id}') cannot start. EXIT!")
                 exit()
 
     def _start_task_distributations(self):
         '''Distribute task to wrk_queue'''
         while True:
             task = self._input_queue.get()
-            input_queue = self.wrk_ps[randint(0, len(self.wrk_ps) - 1)].queue
+            with self._lock:
+                input_queue = self.wrk_ps[randint(0, len(self.wrk_ps) - 1)].queue
             input_queue.put(task)
 
     def predict(self, data, asynchronous=False):
@@ -300,6 +275,44 @@ class Funicorn():
             time.sleep(RESULT_TIMEOUT)
         self.logger.info(f'Sent result with request_id: {request_id}')
         return ret
+    
+    def add_more_workers(self, num_workers, gpu_devices):
+        num_workers = int(num_workers)
+        device = 'CPU' if gpu_devices is None else gpu_devices
+        self.logger.info(f'Add {num_workers} workers in {device}')
+        self.num_workers += num_workers
+        self.add_worker(num_workers, gpu_devices)
+        return 'Added more workers!'
+
+    def add_worker(self, num_workers, gpu_devices):
+        for idx in range(num_workers):
+            ready_event = mp.Event()
+            idle_event = mp.Event()
+            terminate_event = mp.Event()
+            args = (ready_event, terminate_event)
+            if gpu_devices is not None:
+                gpu_id = gpu_devices[idx % len(gpu_devices)]
+            else:
+                gpu_id = None
+            wrk_queue = MQueue()  # mp.Queue()
+            worker_id = randint(0, 999999)
+            args = (worker_id, gpu_id, ready_event, idle_event,
+                    terminate_event, wrk_queue)
+            wrk = mp.Process(target=self._wrk.run, args=args,
+                            daemon=True,
+                            name=f'funicorn-worker-{worker_id}')
+            wrk.start()
+            worker_info = WorkerInfo(wrk=wrk,
+                                    wrk_id=worker_id,
+                                    pid=wrk.pid,
+                                    gpu_id=gpu_id,
+                                    ps_status='unknown',
+                                    queue=wrk_queue,
+                                    ready_event=ready_event,
+                                    idle_event=idle_event,
+                                    terminate_event=terminate_event)
+            with self._lock:                                    
+                self.wrk_ps.append(worker_info)
 
     def terminate_all_workers(self):
         '''Terminate all workers'''

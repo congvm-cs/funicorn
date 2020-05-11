@@ -203,6 +203,22 @@ class HttpApi(threading.Thread):
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
+
+        @app.route('/add_workers', methods=['GET'])
+        def add_workers():
+            try:
+                num_workers =request.args.get('num_workers')
+                gpu_devices =request.args.get('gpu_devices')
+                gpu_devices = gpu_devices.split(',') if gpu_devices is not None else None
+                print(num_workers)
+                ps_stt = self.funicorn_app.add_more_workers(num_workers, gpu_devices)
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
         # End of API
         return app
 
