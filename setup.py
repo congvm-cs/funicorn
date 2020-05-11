@@ -26,9 +26,10 @@ setup(
     ),
     entry_points={
         'console_scripts': ['funicorn-start=funicorn.cli:start',
-                            'funicorn-terminate=funicorn.cli:terminate',
-                            'funicorn-restart=funicorn.cli:restart',
-                            'funicorn-stop=funicorn.cli:idle'
+                            'funicorn-worker-terminate=funicorn.cli:worker_terminate',
+                            'funicorn-worker-idle=funicorn.cli:worker_idle',
+                            'funicorn-worker-resume=funicorn.cli:worker_resume',
+                            'funicorn-worker-restart=funicorn.cli:worker_restart',
                             ],
     }
 )

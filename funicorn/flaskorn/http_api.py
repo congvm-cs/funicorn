@@ -8,14 +8,15 @@ from collections import namedtuple
 from http import HTTPStatus
 import traceback
 
-from ..exceptions import NotSupportedInputFile, MaxFileSizeExeeded
+from ..exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
 from ..utils import get_logger, coloring_network_name
 from ..utils import check_all_ps_status
 
 
 class HttpApi(threading.Thread):
-    def __init__(self, funicorn_app, host, port, stat=None, threads=40, timeout=1000, debug=False):
+    def __init__(self, funicorn_app, host='0.0.0.0', port=5001, stat=None, threads=40, name='HTTP', timeout=1000, debug=False):
         threading.Thread.__init__(self, daemon=True)
+        self.name = name
         self.host = host
         self.port = port
         self.threads = threads
@@ -25,6 +26,7 @@ class HttpApi(threading.Thread):
         self.stat = stat
         self.logger = get_logger(coloring_network_name(
             'HTTP'), mode='debug' if debug else 'info')
+        self.funicorn_app.register_connection(self)
 
     def init_exception(self, app):
         @app.errorhandler(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
@@ -71,6 +73,7 @@ class HttpApi(threading.Thread):
     def create_app(self):
         app = Flask(__name__)
         app = self.init_exception(app)
+
         def check_request_size(request, max_size=5 * 1024 * 1024):
             if request.content_length > max_size:
                 raise MaxFileSizeExeeded(
@@ -153,13 +156,64 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
+        @app.route('/resume', methods=['GET'])
+        def resume_all_workers():
+            try:
+                ps_stt = self.funicorn_app.resume_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/idle', methods=['GET'])
+        def idle_all_workers():
+            try:
+                ps_stt = self.funicorn_app.idle_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/terminate', methods=['GET'])
+        def terminate_all_workers():
+            try:
+                ps_stt = self.funicorn_app.terminate_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/restart', methods=['GET'])
+        def restart_all_workers():
+            try:
+                ps_stt = self.funicorn_app.restart_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
         # End of API
         return app
 
     # https://docs.pylonsproject.org/projects/waitress/en/stable/arguments.html#arguments
     def run(self):
+        if self.funicorn_app is None:
+            raise InitializationError(
+                'Cannot start HTTP service. Funicorn app is required when start http service!')
+
         self.logger.info(
-            f'HTTP Service is running on http://{self.host}:{self.port}')
+            f'Service is running on http://{self.host}:{self.port}')
         serve(app=self.flask_app,
               host=self.host, port=self.port,
               threads=self.threads, _quiet=True, backlog=1024)

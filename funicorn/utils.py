@@ -91,7 +91,7 @@ def coloring_funicorn_name(funicorn_app_name='FUNICORN'):
 
 
 def coloring_network_name(network_name):
-    return colored(network_name, 'blue', attrs=['bold'])
+    return colored(network_name, 'magenta', attrs=['bold'])
 
 
 #--------------------- CLI ---------------------#

@@ -13,3 +13,5 @@ class MaxFileSizeExeeded(Exception):
 class NotSupportedInputFile(Exception):
     pass
 
+class InitializationError(Exception):
+    pass
