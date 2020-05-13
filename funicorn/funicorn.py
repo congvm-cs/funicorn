@@ -183,11 +183,12 @@ class Funicorn():
         self._init_stat()
         self.idle_event = mp.Event()
         self.wrk_ps = []
-        self.connection_apps = []
+        self.connection_apps = {}
 
     def register_connection(self, connection):
-        self.logger.info(f'Register {coloring_network_name(connection.name)} connection')
-        self.connection_apps.append(connection)
+        self.logger.info(
+            f'Register {coloring_network_name(connection.name)} connection')
+        self.connection_apps[connection.name] = connection
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
@@ -215,13 +216,13 @@ class Funicorn():
         return http
 
     def _init_connections(self):
-        for conn in self.connection_apps:
+        for conn_name, conn in self.connection_apps.items():
             conn.start()
-     
+
     def _init_all_workers(self):
         if self.model_cls is None:
             self.logger.warning(
-                    'Cannot start workers because model class is not provided!')
+                'Cannot start workers because model class is not provided!')
         else:
             if self.num_workers <= 0:
                 self.logger.warning(
@@ -234,9 +235,11 @@ class Funicorn():
         for (i, worker_info) in enumerate(self.wrk_ps):
             # todo: select all events with timeout
             is_ready = worker_info.ready_event.wait(timeout)
-            self.logger.info(f"{coloring_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
+            self.logger.info(
+                f"{coloring_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
             if not is_ready:
-                self.logger.error(f"coloring_worker_name(f'WORKER-{worker_info.wrk_id}') cannot start. EXIT!")
+                self.logger.error(
+                    f"coloring_worker_name(f'WORKER-{worker_info.wrk_id}') cannot start. EXIT!")
                 exit()
 
     def _start_task_distributations(self):
@@ -244,7 +247,8 @@ class Funicorn():
         while True:
             task = self._input_queue.get()
             with self._lock:
-                input_queue = self.wrk_ps[randint(0, len(self.wrk_ps) - 1)].queue
+                input_queue = self.wrk_ps[randint(
+                    0, len(self.wrk_ps) - 1)].queue
             input_queue.put(task)
 
     def predict(self, data, asynchronous=False):
@@ -275,7 +279,7 @@ class Funicorn():
             time.sleep(RESULT_TIMEOUT)
         self.logger.info(f'Sent result with request_id: {request_id}')
         return ret
-    
+
     def add_more_workers(self, num_workers, gpu_devices):
         num_workers = int(num_workers)
         device = 'CPU' if gpu_devices is None else gpu_devices
@@ -299,19 +303,19 @@ class Funicorn():
             args = (worker_id, gpu_id, ready_event, idle_event,
                     terminate_event, wrk_queue)
             wrk = mp.Process(target=self._wrk.run, args=args,
-                            daemon=True,
-                            name=f'funicorn-worker-{worker_id}')
+                             daemon=True,
+                             name=f'funicorn-worker-{worker_id}')
             wrk.start()
             worker_info = WorkerInfo(wrk=wrk,
-                                    wrk_id=worker_id,
-                                    pid=wrk.pid,
-                                    gpu_id=gpu_id,
-                                    ps_status='unknown',
-                                    queue=wrk_queue,
-                                    ready_event=ready_event,
-                                    idle_event=idle_event,
-                                    terminate_event=terminate_event)
-            with self._lock:                                    
+                                     wrk_id=worker_id,
+                                     pid=wrk.pid,
+                                     gpu_id=gpu_id,
+                                     ps_status='unknown',
+                                     queue=wrk_queue,
+                                     ready_event=ready_event,
+                                     idle_event=idle_event,
+                                     terminate_event=terminate_event)
+            with self._lock:
                 self.wrk_ps.append(worker_info)
 
     def terminate_all_workers(self):
