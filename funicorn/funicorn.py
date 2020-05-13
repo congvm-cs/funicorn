@@ -4,6 +4,7 @@ import os
 import multiprocessing as mp
 from random import randint
 import threading
+import traceback
 from collections import namedtuple
 import uuid
 import time
@@ -13,7 +14,8 @@ from queue import Queue
 from collections import namedtuple
 from .exceptions import LengthEqualtyError
 from .utils import get_logger, img_bytes_to_img_arr
-from .utils import coloring_worker_name, coloring_funicorn_name, coloring_network_name
+from .utils import (coloring_worker_name, coloring_funicorn_name,
+                    coloring_network_name, get_args_from_class)
 from .stat import Statistic
 from .mqueue import Queue as MQueue
 from .flaskorn import HttpApi
@@ -28,16 +30,16 @@ DEFAULT_BATCH_TIMEOUT = 0.01
 # mp = multiprocessing.get_context("spawn") # Error on Server
 
 __all__ = ['Funicorn']
-Task = namedtuple('Task', ['request_id', 'data'])
+Task = namedtuple('Task', ['request_id', 'data', 'func_name'])
 WorkerInfo = namedtuple('WorkerInfo', ['wrk', 'wrk_id', 'pid', 'gpu_id',
                                        'ps_status', 'queue',
-                                       'ready_event', 'idle_event', 'terminate_event'])
+                                       'ready_event', 'model_init_kwargs', 'terminate_event'])
 
 
 class BaseWorker():
     def __init__(self, model_cls, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, idle_event=None, terminate_event=None, model_init_kwargs=None,
+                 ready_event=None, terminate_event=None, model_init_kwargs=None,
                  debug=False):
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
@@ -46,7 +48,6 @@ class BaseWorker():
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
         self._ready_event = ready_event
-        self._idle_event = idle_event
         self._terminate_event = terminate_event
         self._pid = os.getpid()
         self._model = None
@@ -80,11 +81,15 @@ class BaseWorker():
 
         batch_size = len(batch)
         model_input = [task.data for task in batch]
-
+        func_name = task.func_name
         # Model predict
         start_model_time = time.time()
-        results = self._model.predict(model_input)
+        results = self._model.__getattribute__(func_name)(model_input)
         end_model_time = time.time()
+        
+        if results is None:
+            return batch_size
+            
         assert isinstance(results, list), ValueError(
             '`results` must be a list')
         assert len(results) == len(batch), LengthEqualtyError(
@@ -92,8 +97,7 @@ class BaseWorker():
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
         self.logger.info(
-            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}\
-                 - model-time: {end_model_time - start_model_time}')
+            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time} - model-time: {end_model_time - start_model_time}')
         # Return None or something to notify number of data in queue
         return batch_size
 
@@ -109,7 +113,7 @@ class BaseWorker():
                 if not handled:
                     time.sleep(RESULT_TIMEOUT)
             except Exception as e:
-                self.logger.error(e)
+                self.logger.error(traceback.format_exc())
 
 
 class Worker(BaseWorker):
@@ -127,7 +131,7 @@ class Worker(BaseWorker):
     def _send_response(self, request_id, result):
         self._result_dict[request_id] = result
 
-    def run(self, worker_id=None, gpu_id=None, ready_event=None, idle_event=None, terminate_event=None, wrk_queue=None):
+    def run(self, worker_id=None, gpu_id=None, ready_event=None, terminate_event=None, wrk_queue=None, model_init_kwargs=None):
         ''' Init process parameters
             Every param initialized here are seperable among processes
         '''
@@ -137,8 +141,10 @@ class Worker(BaseWorker):
         self._wrk_queue = wrk_queue
         self._worker_id = worker_id
         self._pid = os.getpid()
-        self._model_init_kwargs.update({'gpu_id': gpu_id})
 
+        self._model_init_kwargs = model_init_kwargs or {}
+        if 'gpu_id' in get_args_from_class(self._model_cls):
+            self._model_init_kwargs.update({'gpu_id': gpu_id})
         device = f'GPU-{gpu_id}' if gpu_id else 'CPU'
         self.logger.info(f'Initializing Worker in {device}')
         self._model = self._model_cls(**self._model_init_kwargs)
@@ -150,8 +156,6 @@ class Worker(BaseWorker):
         if terminate_event:
             self._terminate_event = terminate_event
 
-        if idle_event:
-            self._idle_event = idle_event
         # Run in loop
         super().run()
 
@@ -182,6 +186,8 @@ class Funicorn():
         self.pid = os.getpid()
         self._init_stat()
         self.idle_event = mp.Event()
+        self.wrk_group = {}
+        self.wrk_group_info = {}
         self.wrk_ps = []
         self.connection_apps = {}
 
@@ -245,15 +251,17 @@ class Funicorn():
     def _start_task_distributations(self):
         '''Distribute task to wrk_queue'''
         while True:
-            task = self._input_queue.get()
-            with self._lock:
-                input_queue = self.wrk_ps[randint(
-                    0, len(self.wrk_ps) - 1)].queue
-            input_queue.put(task)
+            if not self.idle_event.is_set():
+                task = self._input_queue.get()
+                for group_name, wrk_ps in self.wrk_group.items():
+                    input_queue = wrk_ps[randint(0, len(wrk_ps) - 1)].queue
+                    input_queue.put(task)
 
-    def predict(self, data, asynchronous=False):
+    def put_task(self, data, func_name='predict', asynchronous=False):
         request_id = str(uuid.uuid4())
-        self._input_queue.put(Task(request_id=request_id, data=data))
+        self._input_queue.put(Task(request_id=request_id,
+                                   data=data,
+                                   func_name=func_name))
         self.logger.info(f'Received data with request_id: {request_id}')
         if asynchronous:
             return request_id
@@ -265,7 +273,7 @@ class Funicorn():
         img_arr = img_bytes_to_img_arr(img_bytes)
         self.logger.info(
             f'[img_bytes_to_img_arr] process-time: {time.time() - start_time}')
-        json_result = self.predict(img_arr)
+        json_result = self.put_task(img_arr)
         if isinstance(json_result, str) or isinstance(json_result, dict):
             ValueError('The result from rpc must be json string')
         return json.dumps(json_result)
@@ -280,18 +288,28 @@ class Funicorn():
         self.logger.info(f'Sent result with request_id: {request_id}')
         return ret
 
-    def add_more_workers(self, num_workers, gpu_devices):
-        num_workers = int(num_workers)
-        device = 'CPU' if gpu_devices is None else gpu_devices
-        self.logger.info(f'Add {num_workers} workers in {device}')
-        self.num_workers += num_workers
-        self.add_worker(num_workers, gpu_devices)
-        return 'Added more workers!'
+    def add_more_workers(self, num_workers, gpu_devices, group_name='default_group', model_init_kwargs=None):
+        if self.model_cls:
+            num_workers = int(num_workers)
+            device = 'CPU' if gpu_devices is None else gpu_devices
+            self.logger.info(
+                f'Add {num_workers} worker(s) in {device} for {group_name}')
+            self.num_workers += num_workers
+            if gpu_devices is None:
+                gpu_devices = [None]*num_workers
+            self.add_worker(num_workers, gpu_devices,
+                            group_name, model_init_kwargs)
+            return 'Added more workers!'
+        else:
+            message = "Cannot add more workers because Model class is not available!"
+            self.logger.warning(message)
+            return message
 
-    def add_worker(self, num_workers, gpu_devices):
+    def add_worker(self, num_workers, gpu_devices, group_name='default_group', model_init_kwargs=None):
+        model_init_kwargs = model_init_kwargs or self._model_init_kwargs
+        wrk_ps = []
         for idx in range(num_workers):
             ready_event = mp.Event()
-            idle_event = mp.Event()
             terminate_event = mp.Event()
             args = (ready_event, terminate_event)
             if gpu_devices is not None:
@@ -300,8 +318,8 @@ class Funicorn():
                 gpu_id = None
             wrk_queue = MQueue()  # mp.Queue()
             worker_id = randint(0, 999999)
-            args = (worker_id, gpu_id, ready_event, idle_event,
-                    terminate_event, wrk_queue)
+            args = (worker_id, gpu_id, ready_event,
+                    terminate_event, wrk_queue, model_init_kwargs)
             wrk = mp.Process(target=self._wrk.run, args=args,
                              daemon=True,
                              name=f'funicorn-worker-{worker_id}')
@@ -313,28 +331,38 @@ class Funicorn():
                                      ps_status='unknown',
                                      queue=wrk_queue,
                                      ready_event=ready_event,
-                                     idle_event=idle_event,
-                                     terminate_event=terminate_event)
+                                     terminate_event=terminate_event,
+                                     model_init_kwargs=model_init_kwargs)
             with self._lock:
-                self.wrk_ps.append(worker_info)
+                wrk_ps.append(worker_info)
+        self.wrk_group.setdefault(group_name, []).extend(wrk_ps)
+
+        group_info = {}
+        group_info.setdefault('num_workers', 0)
+        group_info['num_workers'] += num_workers
+        group_info.setdefault('gpu_devices', []).append(gpu_devices)
+        self.wrk_group_info.update({group_name: group_info})
 
     def terminate_all_workers(self):
         '''Terminate all workers'''
-        if len(self.wrk_ps) == 0:
+        if len(self.wrk_group) == 0:
             self.logger.info('No workers running')
         else:
             self.logger.info(
                 'Received TERMINATE signal. All workers will be killed soon when they finish their jobs')
 
-        for worker_info in self.wrk_ps:
-            worker_info.ready_event.clear()
+        for group_name, wrk_ps in self.wrk_group.items():
+            for worker_info in wrk_ps:
+                worker_info.ready_event.clear()
 
         terminate_workers = []
-        for (i, worker_info) in enumerate(self.wrk_ps):
-            is_terminated = worker_info.terminate_event.wait(20000)
-            if is_terminated:
-                self.wrk_ps.remove(worker_info)
-                terminate_workers.append(worker_info)
+        for group_name, wrk_ps in self.wrk_group.items():
+            for (i, worker_info) in enumerate(wrk_ps):
+                is_terminated = worker_info.terminate_event.wait(100*1000)
+                if is_terminated:
+                    wrk_ps.remove(worker_info)
+                    terminate_workers.append(worker_info)
+            self.wrk_group.pop(group_name)
         return f'Processes will be killed: {", ".join([str(worker_info.pid) for worker_info in terminate_workers])} and there is/are {len(self.wrk_ps)} left'
 
     def idle_all_workers(self):

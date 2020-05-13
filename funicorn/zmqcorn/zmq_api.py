@@ -19,6 +19,11 @@ class ZMQAPI(threading.Thread):
             'RPC'), mode='debug' if debug else 'info')
         self.funicorn_app.register_connection(self)
 
+    def init_connection(self, processor):
+        server_in = self.init_input_connection(processor)
+        server_out = self.init_output_connection(processor)
+        return server_in, server_out
+
     def init_input_connection(self, processor):
         context = zmq.Context()
         socket = context.socket(zmq.SUB)
@@ -35,8 +40,7 @@ class ZMQAPI(threading.Thread):
         return handler
 
     def run(self):
-        processor = self.init_processor(self.funicorn_app)
-        server = self.init_connection(processor)
+        server_in, server_out = self.init_connection(self.funicorn_app)
         self.logger.info(
             f'Server is running at http://{self.host}:{self.port}')
         server.serve()

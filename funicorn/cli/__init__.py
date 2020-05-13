@@ -4,10 +4,12 @@ from ..funicorn import Funicorn
 from ..flaskorn import HttpApi
 from ..thriftcorn import ThriftAPI
 from ..stat import Statistic
-from ..utils import get_args_from_class
+from ..utils import get_args_from_class, get_logger, coloring_worker_name
 import importlib
 import os
 import sys
+
+logger = get_logger(name=coloring_worker_name('CLI'))
 
 CONTEXT_SETTINGS = {'show_default': True}
 
@@ -27,7 +29,7 @@ funicorn_app_options = [
                  help='Model class to use'),
     click.option('--rpc-cls', type=str, default=None,
                  help='Model class to use'),
-    click.option('--num-workers', type=int, default=1,
+    click.option('--num-workers', type=int, default=0,
                  help='A number of workers'),
     click.option('--batch-size', type=int, default=1,
                  help='Inference batch size'),
@@ -48,11 +50,11 @@ funicorn_app_options = [
 ]
 
 
-def cli_requests(url, method='get', params=None):
+def cli_requests(url, method='get', params=None, timeout=None):
     if method == 'get':
-        resp = requests.get(url, params=params, timeout=1000)
+        resp = requests.get(url, params=params, timeout=timeout)
     elif method == 'post':
-        resp = requests.post(url, timeout=1000)
+        resp = requests.post(url, json=params, timeout=timeout)
     return resp.json()
 
 
@@ -68,9 +70,9 @@ def add_options(options):
 @add_options(common_options)
 def worker_terminate(host, port):
     url = f'http://{host}:{port}/terminate'
-    print('> Waiting for terminate to complete...')
+    logger.info('> Waiting for terminate to complete...')
     stt = cli_requests(url)
-    print('> ' + stt)
+    logger.info(stt)
 
 
 @click.command()
@@ -78,7 +80,7 @@ def worker_terminate(host, port):
 def worker_idle(host, port):
     url = f'http://{host}:{port}/idle'
     stt = cli_requests(url)
-    print('> ' + stt)
+    logger.info(stt)
 
 
 @click.command()
@@ -86,28 +88,37 @@ def worker_idle(host, port):
 def worker_resume(host, port):
     url = f'http://{host}:{port}/resume'
     stt = cli_requests(url)
-    print('> ' + stt)
+    logger.info(stt)
 
 
 @click.command()
 @add_options(common_options)
 def worker_restart(host, port):
     url = f'http://{host}:{port}/restart'
-    print('> Waiting for restart to complete...')
+    logger.info('Waiting for restart to complete...')
     stt = cli_requests(url)
-    print('> ' + stt)
+    logger.info(stt)
+
 
 @click.command()
 @add_options(common_options)
 @click.option('--num-workers', type=int, default=0, show_default=True,
-                 help='Additional num workers')
+              help='Additional num workers')
 @click.option('--gpu-devices', type=str, default=None, show_default=True, help='GPU devices')
-def add_workers(host, port, num_workers, gpu_devices):
+@click.option('--group-name', type=str, default='default-group', show_default=True, help='Worker group name')
+@click.argument('model-init-kwargs', nargs=-1)
+def add_workers(host, port, num_workers, gpu_devices, group_name, model_init_kwargs=None):
     url = f'http://{host}:{port}/add_workers'
-    print('> Add more workers...')
-    params = {'num_workers': num_workers, 'gpu_devices': gpu_devices}
-    stt = cli_requests(url, params=params)
-    print('> ' + stt)
+    logger.info('Add more workers...')
+    if model_init_kwargs:
+        model_init_kwargs = dict(kwarg.split(':')
+                                 for kwarg in model_init_kwargs)
+    else:
+        model_init_kwargs = {}
+    params = {'num_workers': num_workers,
+              'gpu_devices': gpu_devices, 'group_name': group_name, 'model_init_kwargs': model_init_kwargs}
+    stt = cli_requests(url, params=params, method='post')
+    logger.info(stt)
 
 
 def split_class_from_path(path):
@@ -118,6 +129,7 @@ def split_class_from_path(path):
         pkg, cls_name = subpaths
     cls_name = getattr(importlib.import_module(pkg), cls_name)
     return pkg, cls_name
+
 
 @click.command(context_settings=CONTEXT_SETTINGS)
 @add_options(funicorn_app_options)
@@ -134,7 +146,7 @@ def start(funicorn_cls=None, model_cls=None, http_cls=None, rpc_cls=None,
     if funicorn_cls is None:
         funicorn_cls = Funicorn
     else:
-        pkg, funicorn_cls = split_class_from_path(funicorn_cls)    
+        pkg, funicorn_cls = split_class_from_path(funicorn_cls)
 
     if model_cls is not None:
         pkg, model_cls = split_class_from_path(model_cls)
@@ -142,6 +154,8 @@ def start(funicorn_cls=None, model_cls=None, http_cls=None, rpc_cls=None,
         if model_init_kwargs:
             model_init_kwargs = dict(kwarg.split(':')
                                      for kwarg in model_init_kwargs)
+        else:
+            model_init_kwargs = {}
 
     if gpu_devices:
         gpu_devices = [

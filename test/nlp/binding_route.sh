@@ -1,0 +1,2 @@
+funicorn-worker-add -p 5000 --num-workers 2 --group-name Model-A server_host:0.0.0.0 server_port:8111 set_return:True | \
+funicorn-worker-add -p 5000 --num-workers 2 --group-name Model-B server_host:0.0.0.0 server_port:8112 

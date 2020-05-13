@@ -124,7 +124,7 @@ class HttpApi(threading.Thread):
             self.stat.increment('num_req')
             try:
                 json = request.json
-                result = self.funicorn_app.predict(json)
+                result = self.funicorn_app.put_task(json)
                 self.stat.increment('num_res')
                 self.logger.info(f'result is: {result}')
             except Exception as e:
@@ -204,14 +204,18 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/add_workers', methods=['GET'])
+        @app.route('/add_workers', methods=['POST'])
         def add_workers():
             try:
-                num_workers =request.args.get('num_workers')
-                gpu_devices =request.args.get('gpu_devices')
-                gpu_devices = gpu_devices.split(',') if gpu_devices is not None else None
-                print(num_workers)
-                ps_stt = self.funicorn_app.add_more_workers(num_workers, gpu_devices)
+                args = request.get_json()
+                num_workers = args.get('num_workers')
+                gpu_devices = args.get('gpu_devices')
+                group_name = args.get('group_name')
+                model_init_kwargs = args.get('model_init_kwargs')
+                gpu_devices = gpu_devices.split(
+                    ',') if gpu_devices is not None else None
+                ps_stt = self.funicorn_app.add_more_workers(
+                    num_workers, gpu_devices, group_name, model_init_kwargs)
                 resp = jsonify(ps_stt)
                 resp.status_code = HTTPStatus.OK
             except Exception as e:
