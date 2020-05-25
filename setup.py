@@ -25,12 +25,12 @@ setup(
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
     ),
     entry_points={
-        'console_scripts': ['funicorn-start=funicorn.cli:start',
-                            'funicorn-worker-terminate=funicorn.cli:worker_terminate',
-                            'funicorn-worker-idle=funicorn.cli:worker_idle',
-                            'funicorn-worker-resume=funicorn.cli:worker_resume',
-                            'funicorn-worker-restart=funicorn.cli:worker_restart',
-                            'funicorn-worker-add=funicorn.cli:add_workers',
+        'console_scripts': ['funicorn=funicorn.cli:start',
+                            'funicorn-terminate=funicorn.cli:worker_terminate',
+                            'funicorn-idle=funicorn.cli:worker_idle',
+                            'funicorn-resume=funicorn.cli:worker_resume',
+                            'funicorn-restart=funicorn.cli:worker_restart',
+                            'funicorn-add=funicorn.cli:add_workers',
                             ],
     }
 )

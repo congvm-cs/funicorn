@@ -3,7 +3,7 @@ from thrift.protocol import TBinaryProtocol
 from thrift.transport import TSocket, TTransport
 from .FunicornService import Processor
 import threading
-from ..utils import get_logger, coloring_network_name
+from ..utils import get_logger, colored_network_name
 
 
 class ThriftAPI(threading.Thread):
@@ -17,7 +17,7 @@ class ThriftAPI(threading.Thread):
         self.stat = stat
         self.threads = threads
         self.debug = debug
-        self.logger = get_logger(coloring_network_name('RPC'), mode='debug' if debug else 'info')
+        self.logger = get_logger(colored_network_name('RPC'), mode='debug' if debug else 'info')
         self.funicorn_app.register_connection(self)
 
     def init_connection(self, processor):

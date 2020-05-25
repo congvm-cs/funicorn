@@ -12,20 +12,19 @@ from queue import Empty
 from queue import Queue
 from collections import namedtuple
 from .exceptions import LengthEqualtyError
-from .utils import get_logger, img_bytes_to_img_arr
-from .utils import coloring_worker_name, coloring_funicorn_name, coloring_network_name
+from .utils import get_logger, img_bytes_to_img_arr, get_args_from_class
+from .utils import colored_worker_name, colored_funicorn_name, colored_network_name
 from .stat import Statistic
 from .mqueue import Queue as MQueue
-from .flaskorn import HttpApi
-from .thriftcorn import ThriftAPI
+from .http_api import HttpAPI
+from .rpc import ThriftAPI
 
 MAX_QUEUE_SIZE = 1000
-RESULT_TIMEOUT = 0.001
+RESULT_TIMEOUT = 0.0005
 DEFAULT_TIMEOUT = 500
 WORKER_TIMEOUT = 3
 DEFAULT_BATCH_TIMEOUT = 0.01
 
-# mp = multiprocessing.get_context("spawn") # Error on Server
 
 __all__ = ['Funicorn']
 Task = namedtuple('Task', ['request_id', 'data'])
@@ -51,7 +50,7 @@ class BaseWorker():
         self._pid = os.getpid()
         self._model = None
         self._debug = debug
-        self.logger = get_logger(coloring_worker_name(
+        self.logger = get_logger(colored_worker_name(
             'BASE-WORKER'), mode='debug' if self._debug else 'info')
 
     def _recv_request(self):
@@ -91,8 +90,8 @@ class BaseWorker():
             'Length of result and batch must be equal')
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
-        self.logger.info(
-            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time}\
+        self.logger.debug(
+            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time} \
                  - model-time: {end_model_time - start_model_time}')
         # Return None or something to notify number of data in queue
         return batch_size
@@ -117,8 +116,6 @@ class Worker(BaseWorker):
         try:
             start_time = time.time()
             task = self._wrk_queue.get(timeout=self.batch_timeout)
-            self.logger.info(
-                f'[_recv_request] get from queue {time.time() - start_time}')
         except Empty:
             raise TimeoutError
         else:
@@ -132,13 +129,14 @@ class Worker(BaseWorker):
             Every param initialized here are seperable among processes
         '''
         self.logger = get_logger(
-            coloring_worker_name(f'WORKER-{worker_id}'), mode='debug' if self._debug else 'info')
+            colored_worker_name(f'WORKER-{worker_id}'), mode='debug' if self._debug else 'info')
         self._init_environ()
         self._wrk_queue = wrk_queue
         self._worker_id = worker_id
         self._pid = os.getpid()
-        self._model_init_kwargs.update({'gpu_id': gpu_id})
-
+        worker_args = get_args_from_class(self._model_cls)
+        if 'gpu_id' in worker_args:
+            self._model_init_kwargs.update({'gpu_id': gpu_id})
         device = f'GPU-{gpu_id}' if gpu_id else 'CPU'
         self.logger.info(f'Initializing Worker in {device}')
         self._model = self._model_cls(**self._model_init_kwargs)
@@ -163,7 +161,7 @@ class Funicorn():
                  model_init_kwargs=None, debug=False, timeout=5000):
         self.model_cls = model_cls
         self.logger = get_logger(
-            coloring_funicorn_name(), mode='debug' if debug else 'info')
+            colored_funicorn_name(), mode='debug' if debug else 'info')
         self._model_init_kwargs = model_init_kwargs or {}
         self.timeout = timeout
         self.debug = debug
@@ -187,7 +185,7 @@ class Funicorn():
 
     def register_connection(self, connection):
         self.logger.info(
-            f'Register {coloring_network_name(connection.name)} connection')
+            f'Register {colored_network_name(connection.name)} connection')
         self.connection_apps[connection.name] = connection
 
     def get_worker_pids(self):
@@ -196,24 +194,6 @@ class Funicorn():
     def _init_stat(self):
         self.stat = Statistic(num_workers=self.num_workers)
         self.stat.update({'parent_pid': self.pid})
-
-    def init_rpc_server(self, funicorn_app, host, port, stat=None,
-                        threads=40, timeout=1000, debug=False):
-        rpc = ThriftAPI(funicorn_app=funicorn_app,
-                        host=host, port=port,
-                        stat=stat, threads=threads,
-                        timeout=timeout,
-                        debug=debug)
-        return rpc
-
-    def init_http_server(self, funicorn_app, host, port, stat=None,
-                         threads=40, timeout=1000, debug=False):
-        http = HttpApi(funicorn_app=funicorn_app,
-                       host=host, port=port,
-                       stat=stat, threads=threads,
-                       timeout=timeout,
-                       debug=debug)
-        return http
 
     def _init_connections(self):
         for conn_name, conn in self.connection_apps.items():
@@ -236,10 +216,10 @@ class Funicorn():
             # todo: select all events with timeout
             is_ready = worker_info.ready_event.wait(timeout)
             self.logger.info(
-                f"{coloring_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
+                f"{colored_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
             if not is_ready:
                 self.logger.error(
-                    f"coloring_worker_name(f'WORKER-{worker_info.wrk_id}') cannot start. EXIT!")
+                    f"{colored_worker_name(f'WORKER-{worker_info.wrk_id}')} cannot start. EXIT!")
                 exit()
 
     def _start_task_distributations(self):
@@ -254,7 +234,7 @@ class Funicorn():
     def predict(self, data, asynchronous=False):
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
-        self.logger.info(f'Received data with request_id: {request_id}')
+        self.logger.debug(f'Received data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
@@ -262,12 +242,11 @@ class Funicorn():
 
     def predict_img_bytes(self, img_bytes):
         start_time = time.time()
-        img_arr = img_bytes_to_img_arr(img_bytes)
-        self.logger.info(
-            f'[img_bytes_to_img_arr] process-time: {time.time() - start_time}')
-        json_result = self.predict(img_arr)
+        json_result = self.predict(img_bytes)
         if isinstance(json_result, str) or isinstance(json_result, dict):
             ValueError('The result from rpc must be json string')
+        self.logger.debug(
+            f'process-time: {time.time() - start_time}')
         return json.dumps(json_result)
 
     def get_result(self, request_id):
@@ -277,7 +256,7 @@ class Funicorn():
             if ret is not None:
                 break
             time.sleep(RESULT_TIMEOUT)
-        self.logger.info(f'Sent result with request_id: {request_id}')
+        self.logger.debug(f'Sent result of request_id to client: {request_id}')
         return ret
 
     def add_more_workers(self, num_workers, gpu_devices):
