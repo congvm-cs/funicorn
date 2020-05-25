@@ -8,12 +8,12 @@ from collections import namedtuple
 from http import HTTPStatus
 import traceback
 
-from ..exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
-from ..utils import get_logger, coloring_network_name
-from ..utils import check_all_ps_status
+from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
+from .utils import get_logger, colored_network_name
+from .utils import check_all_ps_status
 
 
-class HttpApi(threading.Thread):
+class HttpAPI(threading.Thread):
     def __init__(self, funicorn_app, host='0.0.0.0', port=5001, stat=None, threads=40, name='HTTP', timeout=1000, debug=False):
         threading.Thread.__init__(self, daemon=True)
         self.name = name
@@ -24,7 +24,7 @@ class HttpApi(threading.Thread):
         self.flask_app = self.create_app()
         self.funicorn_app = funicorn_app
         self.stat = stat
-        self.logger = get_logger(coloring_network_name(
+        self.logger = get_logger(colored_network_name(
             'HTTP'), mode='debug' if debug else 'info')
         self.funicorn_app.register_connection(self)
 
@@ -82,13 +82,13 @@ class HttpApi(threading.Thread):
         def convert_bytes_to_img_arr(img_bytes):
             try:
                 img = Image.open(img_bytes).convert("RGB")
-                img = np.array(img)
+                img = np.array(img, np.uint8)
                 return img
             except:
                 raise NotSupportedInputFile(
                     "Wrong input file type, only accept image")
 
-        @app.route("/predict_img_bytes", methods=['POST'])
+        @app.route("/api/predict_img_bytes", methods=['POST'])
         def predict_img_bytes():
             final_res = []
             try:
@@ -119,7 +119,7 @@ class HttpApi(threading.Thread):
                 self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
-        @app.route('/predict_json', methods=['POST'])
+        @app.route('/api/predict_json', methods=['POST'])
         def predict_json():
             self.stat.increment('num_req')
             try:
@@ -132,7 +132,7 @@ class HttpApi(threading.Thread):
             else:
                 return jsonify({'result': result})
 
-        @app.route('/statistics', methods=['GET', 'POST'])
+        @app.route('/api/statistics', methods=['GET', 'POST'])
         def statistics():
             try:
                 resp = jsonify(self.stat.info)
@@ -143,7 +143,7 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/status', methods=['GET'])
+        @app.route('/api/status', methods=['GET'])
         def check_process_status():
             try:
                 worker_pids = self.funicorn_app.get_worker_pids()
@@ -156,7 +156,7 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/resume', methods=['GET'])
+        @app.route('/api/resume', methods=['GET'])
         def resume_all_workers():
             try:
                 ps_stt = self.funicorn_app.resume_all_workers()
@@ -168,7 +168,7 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/idle', methods=['GET'])
+        @app.route('/api/idle', methods=['GET'])
         def idle_all_workers():
             try:
                 ps_stt = self.funicorn_app.idle_all_workers()
@@ -180,7 +180,7 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/terminate', methods=['GET'])
+        @app.route('/api/terminate', methods=['GET'])
         def terminate_all_workers():
             try:
                 ps_stt = self.funicorn_app.terminate_all_workers()
@@ -192,10 +192,27 @@ class HttpApi(threading.Thread):
             else:
                 return resp
 
-        @app.route('/restart', methods=['GET'])
+        @app.route('/api/restart', methods=['GET'])
         def restart_all_workers():
             try:
                 ps_stt = self.funicorn_app.restart_all_workers()
+                resp = jsonify(ps_stt)
+                resp.status_code = HTTPStatus.OK
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+            else:
+                return resp
+
+        @app.route('/api/add_workers', methods=['GET'])
+        def add_workers():
+            try:
+                num_workers = request.args.get('num_workers')
+                gpu_devices = request.args.get('gpu_devices')
+                gpu_devices = gpu_devices.split(',') \
+                    if gpu_devices is not None else None
+                ps_stt = self.funicorn_app.add_more_workers(
+                    num_workers, gpu_devices)
                 resp = jsonify(ps_stt)
                 resp.status_code = HTTPStatus.OK
             except Exception as e:
@@ -211,7 +228,6 @@ class HttpApi(threading.Thread):
         if self.funicorn_app is None:
             raise InitializationError(
                 'Cannot start HTTP service. Funicorn app is required when start http service!')
-
         self.logger.info(
             f'Service is running on http://{self.host}:{self.port}')
         serve(app=self.flask_app,

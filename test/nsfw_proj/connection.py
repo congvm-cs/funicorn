@@ -1,6 +1,6 @@
 from funicorn import Funicorn
 from funicorn.thriftcorn.rpc_api import ThriftAPI
-from funicorn.utils import coloring_funicorn_name, coloring_network_name
+from funicorn.utils import colored_funicorn_name, colored_network_name
 import random
 from nlpservice.nlpservice import NLPService
 
@@ -8,7 +8,7 @@ from nlpservice.nlpservice import NLPService
 class NLPThriftApi(ThriftAPI):
     def __init__(self, *args, **kwargs):
         ThriftAPI.__init__(self, name='NLPThriftApi', *args, **kwargs)
-        self.logger.name = coloring_network_name('NLPThriftApi')
+        self.logger.name = colored_network_name('NLPThriftApi')
 
     def init_processor(self, handler):
         processor = NLPService.Processor(handler)
@@ -21,10 +21,10 @@ class NLPGateWay(Funicorn):
     def __init__(self, *args, **kwargs):
         Funicorn.__init__(self, *args, **kwargs)
         self.entries = [
-            'Kiki-Handler-V1', 
+            'Kiki-Handler-V1',
             'Kiki-Handler-V2'
         ]
-        self.logger.name = coloring_funicorn_name('NLPGateWay')
+        self.logger.name = colored_funicorn_name('NLPGateWay')
 
     def get_entries(self, idx):
         return self.entries[idx]
