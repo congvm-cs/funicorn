@@ -12,7 +12,8 @@ from queue import Empty
 from queue import Queue
 from collections import namedtuple
 from .exceptions import LengthEqualtyError
-from .utils import get_logger, img_bytes_to_img_arr, get_args_from_class
+from .utils import img_bytes_to_img_arr, get_args_from_class
+from .logger import get_logger
 from .utils import colored_worker_name, colored_funicorn_name, colored_network_name
 from .stat import Statistic
 from .mqueue import Queue as MQueue
@@ -30,13 +31,14 @@ __all__ = ['Funicorn']
 Task = namedtuple('Task', ['request_id', 'data'])
 WorkerInfo = namedtuple('WorkerInfo', ['wrk', 'wrk_id', 'pid', 'gpu_id',
                                        'ps_status', 'queue',
-                                       'ready_event', 'idle_event', 'terminate_event'])
+                                       'ready_event',
+                                       'terminate_event'])
 
 
 class BaseWorker():
     def __init__(self, model_cls, result_dict=None,
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
-                 ready_event=None, idle_event=None, terminate_event=None, model_init_kwargs=None,
+                 ready_event=None, terminate_event=None, model_init_kwargs=None,
                  debug=False):
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
@@ -45,7 +47,6 @@ class BaseWorker():
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
         self._ready_event = ready_event
-        self._idle_event = idle_event
         self._terminate_event = terminate_event
         self._pid = os.getpid()
         self._model = None
@@ -124,7 +125,7 @@ class Worker(BaseWorker):
     def _send_response(self, request_id, result):
         self._result_dict[request_id] = result
 
-    def run(self, worker_id=None, gpu_id=None, ready_event=None, idle_event=None, terminate_event=None, wrk_queue=None):
+    def run(self, worker_id=None, gpu_id=None, ready_event=None, terminate_event=None, wrk_queue=None):
         ''' Init process parameters
             Every param initialized here are seperable among processes
         '''
@@ -148,14 +149,13 @@ class Worker(BaseWorker):
         if terminate_event:
             self._terminate_event = terminate_event
 
-        if idle_event:
-            self._idle_event = idle_event
-        # Run in loop
         super().run()
 
 
 class Funicorn():
-    def __init__(self, model_cls=None, num_workers=0, batch_size=1, batch_timeout=10,
+    '''Lightweight Deep Learning Inference Framework'''
+
+    def __init__(self, model_cls, num_workers=0, batch_size=1, batch_timeout=10,
                  max_queue_size=1000,
                  gpu_devices=None,
                  model_init_kwargs=None, debug=False, timeout=5000):
@@ -165,7 +165,6 @@ class Funicorn():
         self._model_init_kwargs = model_init_kwargs or {}
         self.timeout = timeout
         self.debug = debug
-
         self._lock = threading.Lock()
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
@@ -178,7 +177,7 @@ class Funicorn():
                            model_init_kwargs=model_init_kwargs)
 
         self.pid = os.getpid()
-        self._init_stat()
+        # self._init_stat()
         self.idle_event = mp.Event()
         self.wrk_ps = []
         self.connection_apps = {}
@@ -190,11 +189,7 @@ class Funicorn():
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
-
-    def _init_stat(self):
-        self.stat = Statistic(num_workers=self.num_workers)
-        self.stat.update({'parent_pid': self.pid})
-
+        
     def _init_connections(self):
         for conn_name, conn in self.connection_apps.items():
             conn.start()
@@ -232,6 +227,7 @@ class Funicorn():
             input_queue.put(task)
 
     def predict(self, data, asynchronous=False):
+        '''Main function to predict data'''
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
         self.logger.debug(f'Received data with request_id: {request_id}')
@@ -270,7 +266,6 @@ class Funicorn():
     def add_worker(self, num_workers, gpu_devices):
         for idx in range(num_workers):
             ready_event = mp.Event()
-            idle_event = mp.Event()
             terminate_event = mp.Event()
             args = (ready_event, terminate_event)
             if gpu_devices is not None:
@@ -279,7 +274,7 @@ class Funicorn():
                 gpu_id = None
             wrk_queue = MQueue()  # mp.Queue()
             worker_id = randint(0, 999999)
-            args = (worker_id, gpu_id, ready_event, idle_event,
+            args = (worker_id, gpu_id, ready_event,
                     terminate_event, wrk_queue)
             wrk = mp.Process(target=self._wrk.run, args=args,
                              daemon=True,
@@ -292,7 +287,6 @@ class Funicorn():
                                      ps_status='unknown',
                                      queue=wrk_queue,
                                      ready_event=ready_event,
-                                     idle_event=idle_event,
                                      terminate_event=terminate_event)
             with self._lock:
                 self.wrk_ps.append(worker_info)

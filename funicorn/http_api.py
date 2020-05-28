@@ -8,9 +8,9 @@ from collections import namedtuple
 from http import HTTPStatus
 import traceback
 
-from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
-from .utils import get_logger, colored_network_name
-from .utils import check_all_ps_status
+from funicorn.exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
+from funicorn.utils import colored_network_name, check_all_ps_status
+from funicorn.logger import get_logger
 
 
 class HttpAPI(threading.Thread):
@@ -132,8 +132,8 @@ class HttpAPI(threading.Thread):
             else:
                 return jsonify({'result': result})
 
-        @app.route('/api/statistics', methods=['GET', 'POST'])
-        def statistics():
+        @app.route('/api/status', methods=['GET'])
+        def status():
             try:
                 resp = jsonify(self.stat.info)
                 resp.status_code = HTTPStatus.OK
@@ -143,18 +143,17 @@ class HttpAPI(threading.Thread):
             else:
                 return resp
 
-        @app.route('/api/status', methods=['GET'])
-        def check_process_status():
+        @app.route('/api/cli_status', methods=['GET'])
+        def cli_status():
             try:
-                worker_pids = self.funicorn_app.get_worker_pids()
-                ps_stt = check_all_ps_status(worker_pids)
-                resp = jsonify(ps_stt)
+                resp = jsonify(self.stat.cli_info)
                 resp.status_code = HTTPStatus.OK
             except Exception as e:
                 self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
+
 
         @app.route('/api/resume', methods=['GET'])
         def resume_all_workers():

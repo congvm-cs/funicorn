@@ -1,9 +1,10 @@
 from thrift.server import TNonblockingServer
 from thrift.protocol import TBinaryProtocol
 from thrift.transport import TSocket, TTransport
-from .FunicornService import Processor
+from funicorn.rpc.FunicornService import Processor
+from funicorn.logger import get_logger
+from funicorn.utils import colored_network_name
 import threading
-from ..utils import get_logger, colored_network_name
 
 
 class ThriftAPI(threading.Thread):
@@ -17,7 +18,8 @@ class ThriftAPI(threading.Thread):
         self.stat = stat
         self.threads = threads
         self.debug = debug
-        self.logger = get_logger(colored_network_name('RPC'), mode='debug' if debug else 'info')
+        self.logger = get_logger(colored_network_name(
+            'RPC'), mode='debug' if debug else 'info')
         self.funicorn_app.register_connection(self)
 
     def init_connection(self, processor):

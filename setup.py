@@ -9,15 +9,14 @@ setup(
     name='funicorn',
     version=__version__,
     description='Funicorn',
-    # packages=['funicorn'],
+    packages=['funicorn'],
     long_description=open('README.md', 'r').read(),
     long_description_content_type='text/markdown',
     author='congvm',
     author_email='congvm.it@gmail.com',
     license='MIT',
-    packages=find_packages(),
     zip_safe=False,
-    # install_requires=requirements,
+    install_requires=requirements,
     classifiers=(
         'Programming Language :: Python :: 3.6',
         'License :: OSI Approved :: MIT License',
@@ -31,6 +30,7 @@ setup(
                             'funicorn-resume=funicorn.cli:worker_resume',
                             'funicorn-restart=funicorn.cli:worker_restart',
                             'funicorn-add=funicorn.cli:add_workers',
+                            'funicorn-status=funicorn.cli:status',
                             ],
     }
 )

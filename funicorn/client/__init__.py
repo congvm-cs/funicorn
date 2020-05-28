@@ -6,8 +6,8 @@ from ..rpc.ttypes import *
 from ..rpc import FunicornService
 from ..utils import (img_bytes_to_img_arr,
                      img_arr_to_img_bytes,
-                     get_logger,
                      colored_worker_name)
+from ..logger import get_logger
 from thrift.protocol.TBinaryProtocol import TBinaryProtocol
 from thrift.transport import TTransport, TSocket
 

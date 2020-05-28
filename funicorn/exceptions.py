@@ -15,3 +15,6 @@ class NotSupportedInputFile(Exception):
 
 class InitializationError(Exception):
     pass
+
+class CommandError(Exception):
+    pass
