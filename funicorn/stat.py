@@ -3,10 +3,6 @@ import threading
 from funicorn.table import print_table
 
 
-class WorkerStats():
-    pass
-
-
 class Statistic():
     def __init__(self, funicorn_app=None):
         self.funicorn_app = funicorn_app
@@ -49,9 +45,10 @@ class Statistic():
 
     def update(self):
         uptime = int(time.time() - self.start_time)
-        self.stats_info['uptime'] = uptime
-        self.stats_info['avg_req'] = 0 if uptime == 0 else self.stats_info['total_req']/uptime
-        self.stats_info['avg_res'] = 0 if uptime == 0 else self.stats_info['total_res']/uptime
+        with self.lock:
+            self.stats_info['uptime'] = uptime
+            self.stats_info['avg_req'] = 0 if uptime == 0 else self.stats_info['total_req']/uptime
+            self.stats_info['avg_res'] = 0 if uptime == 0 else self.stats_info['total_res']/uptime
 
     @property
     def cli_info(self):

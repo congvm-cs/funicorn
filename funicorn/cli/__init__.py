@@ -56,16 +56,17 @@ funicorn_app_options = [
 ]
 
 
-def cli_requests(url, method='get', params=None):
+def cli_requests(url, method='get', params=None, timeout=1):
     try:
         if method == 'get':
-            resp = requests.get(url, params=params, timeout=1000)
+            resp = requests.get(url, params=params, timeout=timeout)
         elif method == 'post':
-            resp = requests.post(url, timeout=1000)
+            resp = requests.post(url, timeout=timeout)
         return resp.json()
     except ConnectionError:
-        print(CommandError('Cannot connect to service! Service may not be started or stopped.'))
+        print('Cannot connect to service! Service may not be started or stopped.')
         exit()
+
 
 def add_options(options):
     def _add_options(func):
@@ -80,9 +81,10 @@ def add_options(options):
 @click.option('--refresh', type=int, default=1, show_default=True,
               help='Refresh time')
 def status(host, port, refresh=1):
+    ''' View dashboard CLI
+    '''
     if refresh < 1:
         refresh = 1
-
     is_print_header = True
     url = f'http://{host}:{port}/api/cli_status'
     while True:
@@ -99,6 +101,8 @@ def status(host, port, refresh=1):
 @click.command()
 @add_options(common_options)
 def worker_terminate(host, port):
+    ''' Terminate all workers CLI
+    '''
     url = f'http://{host}:{port}/api/terminate'
     print('> Waiting for terminate to complete...')
     stt = cli_requests(url)
@@ -108,6 +112,8 @@ def worker_terminate(host, port):
 @click.command()
 @add_options(common_options)
 def worker_idle(host, port):
+    ''' Idle all workers CLI
+    '''
     url = f'http://{host}:{port}/api/idle'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -116,6 +122,8 @@ def worker_idle(host, port):
 @click.command()
 @add_options(common_options)
 def worker_resume(host, port):
+    ''' Resume all workers CLI
+    '''
     url = f'http://{host}:{port}/api/resume'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -124,6 +132,8 @@ def worker_resume(host, port):
 @click.command()
 @add_options(common_options)
 def worker_restart(host, port):
+    ''' Restart all workers CLI
+    '''
     url = f'http://{host}:{port}/api/restart'
     print('> Waiting for restart to complete...')
     stt = cli_requests(url)
@@ -162,7 +172,7 @@ def start(model_cls, funicorn_cls=None, http_cls=None, rpc_cls=None,
             - funicorn-idle: Idle all model workers.\n
             - funicorn-resume: Resume all model workers.\n
             - funicorn-terminate: Terminate all model workers.\n
-
+            - funicorn-status: View the service's dashboard .\n
     """
     if funicorn_cls is None:
         funicorn_cls = Funicorn

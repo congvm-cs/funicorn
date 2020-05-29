@@ -8,6 +8,7 @@ from collections import namedtuple
 import uuid
 import time
 import json
+import traceback
 from queue import Empty
 from queue import Queue
 from collections import namedtuple
@@ -189,7 +190,7 @@ class Funicorn():
 
     def get_worker_pids(self):
         return [wrk.pid for wrk in self.wrk_ps]
-        
+
     def _init_connections(self):
         for conn_name, conn in self.connection_apps.items():
             conn.start()
@@ -346,8 +347,13 @@ class Funicorn():
             exit()
 
     def serve(self):
-        self._init_all_workers()
-        self._wait_for_worker()
-        self._init_connections()
-        self._recheck_all_modules()
-        self._start_task_distributations()
+        try:
+            self._init_all_workers()
+            self._wait_for_worker()
+            self._init_connections()
+            self._recheck_all_modules()
+            self._start_task_distributations()
+        except KeyboardInterrupt:
+            exit()
+        except Exception as e:
+            self.logger.error(traceback.format_exc())

@@ -92,6 +92,7 @@ class HttpAPI(threading.Thread):
         def predict_img_bytes():
             final_res = []
             try:
+                self.stat.increment('total_req')
                 check_request_size(request)
                 if 'img_bytes' in request.files:
                     img_bytes = request.files['img_bytes']
@@ -108,14 +109,19 @@ class HttpAPI(threading.Thread):
                         "data": final_res
                     })
                     resp.status_code = HTTPStatus.OK
+                    self.stat.increment('total_res')
                     return resp
                 else:
+                    self.stat.increment('crashes')
                     abort(HTTPStatus.BAD_REQUEST)
             except NotSupportedInputFile as e:
+                self.stat.increment('crashes')
                 abort(HTTPStatus.BAD_REQUEST)
             except MaxFileSizeExeeded as e:
+                self.stat.increment('crashes')
                 abort(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             except Exception as e:
+                self.stat.increment('crashes')
                 self.logger.error(traceback.format_exc())
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
