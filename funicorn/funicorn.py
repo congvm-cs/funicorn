@@ -22,7 +22,7 @@ from .http_api import HttpAPI
 from .rpc import ThriftAPI
 
 MAX_QUEUE_SIZE = 1000
-RESULT_TIMEOUT = 0.0005
+RESULT_TIMEOUT = 0.0001
 DEFAULT_TIMEOUT = 500
 WORKER_TIMEOUT = 3
 DEFAULT_BATCH_TIMEOUT = 0.01
@@ -41,6 +41,8 @@ class BaseWorker():
                  batch_size=1, batch_timeout=DEFAULT_BATCH_TIMEOUT,
                  ready_event=None, terminate_event=None, model_init_kwargs=None,
                  debug=False):
+
+        self._worker_id = None
         self._model_init_kwargs = model_init_kwargs or {}
         self._model_cls = model_cls
         self._wrk_queue = None
@@ -93,8 +95,7 @@ class BaseWorker():
         for (task, result) in zip(batch, results):
             self._send_response(task.request_id, result)
         self.logger.debug(
-            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time} \
-                 - model-time: {end_model_time - start_model_time}')
+            f'Inference with batch_size: {batch_size} - inference-time: {time.time() - start_time} - model-time: {end_model_time - start_model_time}')
         # Return None or something to notify number of data in queue
         return batch_size
 
@@ -102,6 +103,7 @@ class BaseWorker():
         '''Loop into a queue'''
         while True:
             try:
+                self.logger.debug('{} process data'.format(self._worker_id))
                 handled = self.run_once()
                 if self._ready_event and not self._ready_event.is_set() and (self._wrk_queue.qsize() == 0):
                     self.logger.info('All jobs have been done. Terminated')
@@ -116,7 +118,6 @@ class BaseWorker():
 class Worker(BaseWorker):
     def _recv_request(self):
         try:
-            start_time = time.time()
             task = self._wrk_queue.get(timeout=self.batch_timeout)
         except Empty:
             raise TimeoutError
@@ -156,7 +157,7 @@ class Worker(BaseWorker):
 class Funicorn():
     '''Lightweight Deep Learning Inference Framework'''
 
-    def __init__(self, model_cls, num_workers=0, batch_size=1, batch_timeout=10,
+    def __init__(self, model_cls, num_workers=1, batch_size=1, batch_timeout=10,
                  max_queue_size=1000,
                  gpu_devices=None,
                  model_init_kwargs=None, debug=False, timeout=5000):
@@ -172,10 +173,13 @@ class Funicorn():
 
         self._input_queue = Queue()
         self._result_dict = mp.Manager().dict()
-
+        if batch_size == 1:
+            batch_timeout = None
+        elif batch_timeout is not None:
+            batch_timeout = batch_timeout/1000
         self._wrk = Worker(self.model_cls, self._result_dict,
-                           batch_size=batch_size, batch_timeout=batch_timeout/1000,
-                           model_init_kwargs=model_init_kwargs)
+                           batch_size=batch_size, batch_timeout=batch_timeout,
+                           model_init_kwargs=model_init_kwargs, debug=self.debug)
 
         self.pid = os.getpid()
         # self._init_stat()
@@ -236,15 +240,6 @@ class Funicorn():
             return request_id
         else:
             return self.get_result(request_id)
-
-    def predict_img_bytes(self, img_bytes):
-        start_time = time.time()
-        json_result = self.predict(img_bytes)
-        if isinstance(json_result, str) or isinstance(json_result, dict):
-            ValueError('The result from rpc must be json string')
-        self.logger.debug(
-            f'process-time: {time.time() - start_time}')
-        return json.dumps(json_result)
 
     def get_result(self, request_id):
         ret = None

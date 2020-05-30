@@ -11,6 +11,7 @@ import traceback
 from funicorn.exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
 from funicorn.utils import colored_network_name, check_all_ps_status
 from funicorn.logger import get_logger
+from funicorn.stat import Statistic
 
 
 class HttpAPI(threading.Thread):
@@ -23,9 +24,9 @@ class HttpAPI(threading.Thread):
         self.timeout = timeout
         self.flask_app = self.create_app()
         self.funicorn_app = funicorn_app
-        self.stat = stat
-        self.logger = get_logger(colored_network_name(
-            'HTTP'), mode='debug' if debug else 'info')
+        self.stat = stat or Statistic(funicorn_app=funicorn_app)
+        self.logger = get_logger(colored_network_name('HTTP'),
+                                 mode='debug' if debug else 'info')
         self.funicorn_app.register_connection(self)
 
     def init_exception(self, app):
@@ -114,12 +115,15 @@ class HttpAPI(threading.Thread):
                 else:
                     self.stat.increment('crashes')
                     abort(HTTPStatus.BAD_REQUEST)
+
             except NotSupportedInputFile as e:
                 self.stat.increment('crashes')
                 abort(HTTPStatus.BAD_REQUEST)
+
             except MaxFileSizeExeeded as e:
                 self.stat.increment('crashes')
                 abort(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+
             except Exception as e:
                 self.stat.increment('crashes')
                 self.logger.error(traceback.format_exc())
@@ -159,7 +163,6 @@ class HttpAPI(threading.Thread):
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
-
 
         @app.route('/api/resume', methods=['GET'])
         def resume_all_workers():
@@ -225,6 +228,14 @@ class HttpAPI(threading.Thread):
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR)
             else:
                 return resp
+
+        @app.route('/', methods=['GET'])
+        def index():
+            try:
+                return 'Welcome to Funicorn'
+            except Exception as e:
+                self.logger.error(traceback.format_exc())
+                abort(HTTPStatus.INTERNAL_SERVER_ERROR)
         # End of API
         return app
 

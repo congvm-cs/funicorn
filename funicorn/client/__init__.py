@@ -2,17 +2,18 @@ import time
 import sys
 import cv2
 import numpy as np
-from ..rpc.ttypes import *
-from ..rpc import FunicornService
-from ..utils import (img_bytes_to_img_arr,
-                     img_arr_to_img_bytes,
-                     colored_worker_name)
-from ..logger import get_logger
+
+from funicorn.rpc.ttypes import *
+from funicorn.rpc import FunicornService
+from funicorn.utils import (img_bytes_to_img_arr,
+                            img_arr_to_img_bytes,
+                            colored_worker_name)
+from funicorn.logger import get_logger
 from thrift.protocol.TBinaryProtocol import TBinaryProtocol
 from thrift.transport import TTransport, TSocket
 
 
-class Client():
+class ClientRPC():
     '''Simple Client for Funicorn'''
 
     def __init__(self, port, host='0.0.0.0', timeout_ms=1000, debug=False, asynchronous=False):
@@ -62,5 +63,5 @@ class Client():
         return self.client.ping()
 
     def close(self):
-        if self.transport.isOpen():
+        if self.transport or self.transport.isOpen():
             self.transport.close()

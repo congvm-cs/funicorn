@@ -47,8 +47,8 @@ class Statistic():
         uptime = int(time.time() - self.start_time)
         with self.lock:
             self.stats_info['uptime'] = uptime
-            self.stats_info['avg_req'] = 0 if uptime == 0 else self.stats_info['total_req']/uptime
-            self.stats_info['avg_res'] = 0 if uptime == 0 else self.stats_info['total_res']/uptime
+            self.stats_info['avg_req'] = 0 if uptime == 0 else round(self.stats_info['total_req']/uptime, 2)
+            self.stats_info['avg_res'] = 0 if uptime == 0 else round(self.stats_info['total_res']/uptime, 2)
 
     @property
     def cli_info(self):
