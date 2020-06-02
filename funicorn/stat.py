@@ -1,48 +1,59 @@
 import time
 import threading
+from funicorn.table import print_table
 
 
 class Statistic():
-    def __init__(self, num_workers):
-        self.statistics_info = {
-            'start_time': time.time(),
-            'num_req': 0,
-            'num_res': 0,
+    def __init__(self, funicorn_app=None):
+        self.funicorn_app = funicorn_app
+        self.start_time = time.time()
+        self.stats_info = {
+            'status': 'live',
+            'uptime': 0,
+            'total_req': 0,
+            'total_res': 0,
             'avg_latency': 0,
-            'avg_req_per_sec': 0,
-            'avg_res_per_sec': 0,
+            'avg_req': 0,
+            'avg_res': 0,
             'crashes': 0,
-            'num_workers': num_workers
         }
         self.lock = threading.Lock()
 
     def __getitem__(self, attr):
-        return self.statistics_info[attr]
+        return self.stats_info[attr]
 
     def __setitem__(self, attr, value):
         with self.lock:
-            self.statistics_info[attr] = value
-
-    def __repr__(self):
-        print(self.statistics_info)
+            self.stats_info[attr] = value
 
     def increment(self, name, value=1):
         with self.lock:
-            self.statistics_info[name] += value
+            self.stats_info[name] += value
 
     def decrement(self, name, value=1):
         with self.lock:
-            self.statistics_info[name] -= value
+            self.stats_info[name] -= value
 
-    def average(self, name, value):
+    def average(self, name):
         with self.lock:
-            n_req = self.statistics_info['num_req']
-            self.statistics_info[name] += value
-            self.statistics_info[name] /= n_req
+            return self.stats_info[name]
 
     @property
     def info(self):
-        return self.statistics_info
+        self.update()
+        return self.stats_info
 
-    def update(self, data: dict):
-        return self.statistics_info.update(data)
+    def update(self):
+        uptime = int(time.time() - self.start_time)
+        with self.lock:
+            self.stats_info['uptime'] = uptime
+            self.stats_info['avg_req'] = 0 if uptime == 0 else round(self.stats_info['total_req']/uptime, 2)
+            self.stats_info['avg_res'] = 0 if uptime == 0 else round(self.stats_info['total_res']/uptime, 2)
+
+    @property
+    def cli_info(self):
+        self.update()
+        table = [['status', 'uptime', 'total requests', 'total responses', 'avg latency', 'avg requests', 'avg responses', 'crashes'],
+                 [self.stats_info['status'], self.stats_info['uptime'], self.stats_info['total_req'], self.stats_info['total_res'],
+                  self.stats_info['avg_latency'], self.stats_info['avg_req'], self.stats_info['avg_res'], self.stats_info['crashes']]]
+        return print_table(table, color=(0, 255, 0))

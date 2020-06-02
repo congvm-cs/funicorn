@@ -1,13 +1,18 @@
 import requests
+from requests.exceptions import ConnectionError
+from ..exceptions import CommandError
 import click
 from ..funicorn import Funicorn
 from ..http_api import HttpAPI
 from ..rpc import ThriftAPI
 from ..stat import Statistic
+from ..table import print_rows_in_table
 from ..utils import get_args_from_class, split_class_from_path
 import importlib
 import os
 import sys
+import time
+
 
 CONTEXT_SETTINGS = {'show_default': True}
 
@@ -51,12 +56,16 @@ funicorn_app_options = [
 ]
 
 
-def cli_requests(url, method='get', params=None):
-    if method == 'get':
-        resp = requests.get(url, params=params, timeout=1000)
-    elif method == 'post':
-        resp = requests.post(url, timeout=1000)
-    return resp.json()
+def cli_requests(url, method='get', params=None, timeout=1):
+    try:
+        if method == 'get':
+            resp = requests.get(url, params=params, timeout=timeout)
+        elif method == 'post':
+            resp = requests.post(url, timeout=timeout)
+        return resp.json()
+    except ConnectionError:
+        print('Cannot connect to service! Service may not be started or stopped.')
+        exit()
 
 
 def add_options(options):
@@ -69,7 +78,31 @@ def add_options(options):
 
 @click.command()
 @add_options(common_options)
+@click.option('--refresh', type=int, default=1, show_default=True,
+              help='Refresh time')
+def status(host, port, refresh=1):
+    ''' View dashboard CLI
+    '''
+    if refresh < 1:
+        refresh = 1
+    is_print_header = True
+    url = f'http://{host}:{port}/api/cli_status'
+    while True:
+        try:
+            stt = cli_requests(url)
+            print_rows_in_table(stt, print_headers=is_print_header)
+            if is_print_header:
+                is_print_header = False
+            time.sleep(refresh)
+        except KeyboardInterrupt:
+            exit()
+
+
+@click.command()
+@add_options(common_options)
 def worker_terminate(host, port):
+    ''' Terminate all workers CLI
+    '''
     url = f'http://{host}:{port}/api/terminate'
     print('> Waiting for terminate to complete...')
     stt = cli_requests(url)
@@ -79,6 +112,8 @@ def worker_terminate(host, port):
 @click.command()
 @add_options(common_options)
 def worker_idle(host, port):
+    ''' Idle all workers CLI
+    '''
     url = f'http://{host}:{port}/api/idle'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -87,6 +122,8 @@ def worker_idle(host, port):
 @click.command()
 @add_options(common_options)
 def worker_resume(host, port):
+    ''' Resume all workers CLI
+    '''
     url = f'http://{host}:{port}/api/resume'
     stt = cli_requests(url)
     print('> ' + stt)
@@ -95,6 +132,8 @@ def worker_resume(host, port):
 @click.command()
 @add_options(common_options)
 def worker_restart(host, port):
+    ''' Restart all workers CLI
+    '''
     url = f'http://{host}:{port}/api/restart'
     print('> Waiting for restart to complete...')
     stt = cli_requests(url)
@@ -133,7 +172,7 @@ def start(model_cls, funicorn_cls=None, http_cls=None, rpc_cls=None,
             - funicorn-idle: Idle all model workers.\n
             - funicorn-resume: Resume all model workers.\n
             - funicorn-terminate: Terminate all model workers.\n
-
+            - funicorn-status: View the service's dashboard .\n
     """
     if funicorn_cls is None:
         funicorn_cls = Funicorn
@@ -159,7 +198,7 @@ def start(model_cls, funicorn_cls=None, http_cls=None, rpc_cls=None,
                                 model_init_kwargs=model_init_kwargs,
                                 debug=debug)
 
-    stat = Statistic(num_workers=num_workers)
+    stat = Statistic(funicorn_app=funicorn_app)
 
     if (rpc_host and http_host) and (rpc_port == http_port):
         raise ConnectionError('rpc_port and http_port must be different.')

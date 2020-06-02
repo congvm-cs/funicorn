@@ -1,5 +1,5 @@
 from funicorn import Funicorn
-from funicorn.utils import get_logger
+from funicorn.logger import get_logger
 import os
 import tensorflow as tf
 
