@@ -8,10 +8,10 @@ from collections import namedtuple
 from http import HTTPStatus
 import traceback
 
-from funicorn.exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
-from funicorn.utils import colored_network_name, check_all_ps_status
-from funicorn.logger import get_logger
-from funicorn.stat import Statistic
+from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
+from .utils import colored_network_name, check_all_ps_status
+from .logger import get_logger
+from .stat import Statistic
 
 
 class HttpAPI(threading.Thread):

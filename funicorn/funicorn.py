@@ -1,5 +1,3 @@
-''' Notes on multiprocessing in python 
-'''
 import os
 import multiprocessing as mp
 from random import randint
@@ -83,7 +81,6 @@ class BaseWorker():
 
         batch_size = len(batch)
         model_input = [task.data for task in batch]
-
         # Model predict
         start_model_time = time.time()
         results = self._model.predict(model_input)
@@ -103,7 +100,7 @@ class BaseWorker():
         '''Loop into a queue'''
         while True:
             try:
-                self.logger.debug('{} process data'.format(self._worker_id))
+                self.logger.info('Process new data!')
                 handled = self.run_once()
                 if self._ready_event and not self._ready_event.is_set() and (self._wrk_queue.qsize() == 0):
                     self.logger.info('All jobs have been done. Terminated')
@@ -171,7 +168,7 @@ class Funicorn():
         self.gpu_devices = gpu_devices
         self.num_workers = num_workers
 
-        self._input_queue = Queue()
+        self._input_queue = MQueue()
         self._result_dict = mp.Manager().dict()
         if batch_size == 1:
             batch_timeout = None
@@ -226,6 +223,8 @@ class Funicorn():
         '''Distribute task to wrk_queue'''
         while True:
             task = self._input_queue.get()
+            self.logger.debug(
+                f'Get data from input queue: {self._input_queue}')
             with self._lock:
                 input_queue = self.wrk_ps[randint(
                     0, len(self.wrk_ps) - 1)].queue
@@ -235,11 +234,21 @@ class Funicorn():
         '''Main function to predict data'''
         request_id = str(uuid.uuid4())
         self._input_queue.put(Task(request_id=request_id, data=data))
-        self.logger.debug(f'Received data with request_id: {request_id}')
+        self.logger.info(
+            f'Received data with request_id: {request_id}')
         if asynchronous:
             return request_id
         else:
             return self.get_result(request_id)
+
+    @property
+    def input_queue(self):
+        self.logger.info(f'Get input queue: {self._input_queue}')
+        return self._input_queue
+
+    @property
+    def result_dict(self):
+        return self._result_dict
 
     def get_result(self, request_id):
         ret = None
@@ -331,10 +340,6 @@ class Funicorn():
     def check_all_worker(self):
         '''Check status of all workers. Restart them if necessary'''
         pass
-
-    def ping(self):
-        self.logger.info("Ping!")
-        return
 
     def _recheck_all_modules(self):
         if len(self.connection_apps) == 0 and not self.model_cls:

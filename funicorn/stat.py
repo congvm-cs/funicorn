@@ -1,7 +1,7 @@
 import time
 import threading
-from funicorn.table import print_table
-
+from .table import print_table
+from .logger import get_logger
 
 class Statistic():
     def __init__(self, funicorn_app=None):
@@ -18,7 +18,9 @@ class Statistic():
             'crashes': 0,
         }
         self.lock = threading.Lock()
-
+        self.logger = get_logger(name='Stat', mode='info')
+        self.logger.info('Init statistics')
+        
     def __getitem__(self, attr):
         return self.stats_info[attr]
 
