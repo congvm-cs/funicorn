@@ -1,12 +1,15 @@
 from thrift.server import TNonblockingServer
 from thrift.protocol import TBinaryProtocol
 from thrift.transport import TSocket, TTransport
-from funicorn.rpc.FunicornService import Processor
-from funicorn.logger import get_logger
-from funicorn.utils import colored_network_name
+
+from .FunicornService import Processor
+from .thrift_server import TModelPool
+from ..logger import get_logger
+from ..utils import colored_network_name
 import threading
 import time
 import json
+import uuid
 
 
 class Handler():
@@ -14,17 +17,25 @@ class Handler():
         self.funicorn_app = funicorn_app
         self.stat = stat
         self.logger = logger
+        self.logger.info('Init Handler!')
+
+    def preprocess(self, data):
+        return data
 
     def predict_img_bytes(self, img_bytes):
         start_time = time.time()
         assert isinstance(img_bytes, bytes)
-        json_result = self.funicorn_app.predict(img_bytes)
+        data = self.preprocess(img_bytes)
+        json_result = self.funicorn_app.predict(data)
         self.stat.increment('total_req')
         if isinstance(json_result, str) or isinstance(json_result, dict):
             ValueError('The result from rpc must be json string')
-        self.logger.debug(f'process-time: {time.time() - start_time}')
+        self.logger.info(f'process-time: {time.time() - start_time}')
         self.stat.increment('total_res')
         return json.dumps(json_result)
+
+    def ping(self):
+        self.logger.info('Ping!')
 
 
 class ThriftAPI(threading.Thread):
@@ -75,6 +86,46 @@ class ThriftAPI(threading.Thread):
         handler = self.init_handler()
         processor = self.init_processor(handler)
         server = self.init_connection(processor)
+        self.logger.info(
+            f'Server is running at http://{self.host}:{self.port}')
+        server.serve()
+
+
+class ThriftAPIV2(ThriftAPI):
+    def __init__(self, handler_cls=None, processor_cls=None, *args, **kwargs):
+        ThriftAPI.__init__(self, *args, **kwargs)
+        self._handler_cls = Handler if handler_cls is None else handler_cls
+        self._processor_cls = Processor if processor_cls is None else processor_cls
+
+    @property
+    def handler_cls(self):
+        return self._handler_cls
+
+    @handler_cls.setter
+    def handler_cls(self, handler_cls):
+        self._handler_cls = handler_cls
+
+    @property
+    def processor_cls(self, processor_cls):
+        return self._processor_cls
+
+    @processor_cls.setter
+    def processor_cls(self, processor_cls):
+        self.processor_cls = processor_cls
+
+    def run(self):
+        socket = TSocket.TServerSocket(host=self.host, port=self.port)
+        prot_fac = TBinaryProtocol.TBinaryProtocolFactory()
+        list_model_config = [
+            {"funicorn_app": self.funicorn_app,
+             "stat": self.stat,
+             "logger": self.logger}]*self.threads
+        server = TModelPool.TModelPoolServer(
+            handler_cls=self._handler_cls,
+            processor_cls=self._processor_cls,
+            tsocket=socket, protocol_factory=prot_fac,
+            list_model_config=list_model_config
+        )
         self.logger.info(
             f'Server is running at http://{self.host}:{self.port}')
         server.serve()
