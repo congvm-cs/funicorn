@@ -9,7 +9,7 @@ setup(
     name='funicorn',
     version=__version__,
     description='Funicorn',
-    packages=['funicorn'],
+    packages=find_packages(),
     long_description=open('README.md', 'r').read(),
     long_description_content_type='text/markdown',
     author='congvm',

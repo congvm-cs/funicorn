@@ -9,20 +9,17 @@ import json
 import traceback
 from queue import Empty
 from queue import Queue
-from collections import namedtuple
 from .exceptions import LengthEqualtyError
 from .utils import img_bytes_to_img_arr, get_args_from_class
 from .logger import get_logger
 from .utils import colored_worker_name, colored_funicorn_name, colored_network_name
-from .stat import Statistic
 from .mqueue import Queue as MQueue
-from .http_api import HttpAPI
-from .rpc import ThriftAPI
+import pickle
 
 MAX_QUEUE_SIZE = 1000
 RESULT_TIMEOUT = 0.0001
 DEFAULT_TIMEOUT = 500
-WORKER_TIMEOUT = 3
+WORKER_TIMEOUT = 5
 DEFAULT_BATCH_TIMEOUT = 0.01
 
 
@@ -86,7 +83,7 @@ class BaseWorker():
         results = self._model.predict(model_input)
         end_model_time = time.time()
         assert isinstance(results, list), ValueError(
-            '`results` must be a list')
+            '`results` must be a list but receive `{}` which is not valid'.format(results))
         assert len(results) == len(batch), LengthEqualtyError(
             'Length of result and batch must be equal')
         for (task, result) in zip(batch, results):
@@ -100,7 +97,7 @@ class BaseWorker():
         '''Loop into a queue'''
         while True:
             try:
-                self.logger.info('Process new data!')
+                self.logger.debug('Process new data!')
                 handled = self.run_once()
                 if self._ready_event and not self._ready_event.is_set() and (self._wrk_queue.qsize() == 0):
                     self.logger.info('All jobs have been done. Terminated')
@@ -216,8 +213,8 @@ class Funicorn():
                 f"{colored_worker_name(f'WORKER-{worker_info.wrk_id}')} ready state: {is_ready}")
             if not is_ready:
                 self.logger.error(
-                    f"{colored_worker_name(f'WORKER-{worker_info.wrk_id}')} cannot start. EXIT!")
-                exit()
+                    f"{colored_worker_name(f'WORKER-{worker_info.wrk_id}')} cannot start.")
+                # exit()
 
     def _start_task_distributations(self):
         '''Distribute task to wrk_queue'''
@@ -346,7 +343,7 @@ class Funicorn():
             self.logger.error("Nothing is running. STOP!")
             exit()
 
-    def serve(self):
+    def _serve(self):
         try:
             self._init_all_workers()
             self._wait_for_worker()
@@ -357,3 +354,10 @@ class Funicorn():
             exit()
         except Exception as e:
             self.logger.error(traceback.format_exc())
+
+    def serve(self, run_in_background=False):
+        if run_in_background:
+            t = threading.Thread(target=self._serve, daemon=True)
+            t.start()
+        else:
+            self._serve()

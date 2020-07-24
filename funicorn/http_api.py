@@ -9,25 +9,32 @@ from http import HTTPStatus
 import traceback
 
 from .exceptions import NotSupportedInputFile, MaxFileSizeExeeded, InitializationError
+from .exceptions import DownloadURLError
 from .utils import colored_network_name, check_all_ps_status
 from .logger import get_logger
 from .stat import Statistic
+from enum import Enum
+
+
+class ResponseStatus(Enum):
+    CANNOT_DOWNLOAD_URL = 0
 
 
 class HttpAPI(threading.Thread):
-    def __init__(self, funicorn_app, host='0.0.0.0', port=5001, stat=None, threads=40, name='HTTP', timeout=1000, debug=False):
+    def __init__(self, funicorn_app=None, host='0.0.0.0', port=5001, stat=None, threads=40, name='HTTP', timeout=1000, debug=False, register_conn=True):
         threading.Thread.__init__(self, daemon=True)
         self.name = name
         self.host = host
         self.port = port
         self.threads = threads
         self.timeout = timeout
-        self.flask_app = self.create_app()
         self.funicorn_app = funicorn_app
         self.stat = stat or Statistic(funicorn_app=funicorn_app)
         self.logger = get_logger(colored_network_name('HTTP'),
                                  mode='debug' if debug else 'info')
-        self.funicorn_app.register_connection(self)
+
+        if register_conn and funicorn_app is not None:
+            self.funicorn_app.register_connection(self)
 
     def init_exception(self, app):
         @app.errorhandler(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
@@ -35,7 +42,7 @@ class HttpAPI(threading.Thread):
             resp = jsonify({
                 "error_code": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 "error_message": 'Request Size Exeeded',
-                "data": []
+                "results": []
             })
             resp.status_code = HTTPStatus.REQUEST_ENTITY_TOO_LARGE
             return resp
@@ -45,7 +52,7 @@ class HttpAPI(threading.Thread):
             resp = jsonify({
                 "error_code": HTTPStatus.NOT_FOUND,
                 "error_message": "Api Not Found",
-                "data": []
+                "results": []
             })
             resp.status_code = HTTPStatus.NOT_FOUND
             return resp
@@ -55,9 +62,19 @@ class HttpAPI(threading.Thread):
             resp = jsonify({
                 "error_code": HTTPStatus.BAD_REQUEST,
                 "error_message": "Wrong request parameter",
-                "data": []
+                "results": []
             })
             resp.status_code = HTTPStatus.BAD_REQUEST
+            return resp
+
+        @app.errorhandler(DownloadURLError)
+        def wrong_request_params(error):
+            resp = jsonify({
+                "error_code": error.status_code,
+                "error_message": error.message,
+                "results": []
+            })
+            resp.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
             return resp
 
         @app.errorhandler(HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -65,7 +82,7 @@ class HttpAPI(threading.Thread):
             resp = jsonify({
                 "error_code": HTTPStatus.INTERNAL_SERVER_ERROR,
                 "error_message": "Internal server error",
-                "data": []
+                "results": []
             })
             resp.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
             return resp
@@ -83,7 +100,7 @@ class HttpAPI(threading.Thread):
         def convert_bytes_to_img_arr(img_bytes):
             try:
                 img = Image.open(img_bytes).convert("RGB")
-                img = np.array(img, np.uint8)
+                # img = np.array(img, np.uint8)
                 return img
             except:
                 raise NotSupportedInputFile(
@@ -99,15 +116,15 @@ class HttpAPI(threading.Thread):
                     img_bytes = request.files['img_bytes']
                     img = convert_bytes_to_img_arr(img_bytes)
                     results = self.funicorn_app.predict_img_bytes(img)
-                    if results is not None:
-                        final_res = results
+                    if results is ResponseStatus.CANNOT_DOWNLOAD_URL:
+                        abort(DownloadURLError)
                     else:
-                        abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+                        final_res = results
                     final_res = final_res if len(final_res) != 0 else []
                     resp = jsonify({
                         "error_code": 0,
                         "error_message": "Successful.",
-                        "data": final_res
+                        "results": final_res
                     })
                     resp.status_code = HTTPStatus.OK
                     self.stat.increment('total_res')
@@ -133,8 +150,8 @@ class HttpAPI(threading.Thread):
         def predict_json():
             self.stat.increment('num_req')
             try:
-                json = request.json
-                result = self.funicorn_app.predict(json)
+                url = request.args['url']
+                result = self.funicorn_app.predict(url)
                 self.stat.increment('num_res')
                 self.logger.info(f'result is: {result}')
             except Exception as e:
@@ -229,6 +246,44 @@ class HttpAPI(threading.Thread):
             else:
                 return resp
 
+        @app.route('/api/predict_url', methods=['POST', 'GET'])
+        def predict_url():
+            final_res = []
+            try:
+                self.stat.increment('total_req')
+                if 'url' in request.args:
+                    url = request.args['url']
+                    results = self.funicorn_app.predict(url)
+                    if results is ResponseStatus.CANNOT_DOWNLOAD_URL:
+                        raise DownloadURLError(
+                            message='Cannot download data from url!')
+                    else:
+                        final_res = results
+                    resp = jsonify({
+                        "error_code": HTTPStatus.OK,
+                        "error_message": "Successful.",
+                        "results": final_res
+                    })
+                    resp.status_code = HTTPStatus.OK
+                    self.stat.increment('total_res')
+                    return resp
+                else:
+                    self.stat.increment('crashes')
+                    abort(HTTPStatus.BAD_REQUEST)
+
+            except NotSupportedInputFile as e:
+                self.stat.increment('crashes')
+                abort(HTTPStatus.BAD_REQUEST)
+
+            except MaxFileSizeExeeded as e:
+                self.stat.increment('crashes')
+                abort(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+
+            # except Exception as e:
+            #     self.stat.increment('crashes')
+            #     self.logger.error(traceback.format_exc())
+            #     abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+
         @app.route('/', methods=['GET'])
         def index():
             try:
@@ -241,6 +296,7 @@ class HttpAPI(threading.Thread):
 
     # https://docs.pylonsproject.org/projects/waitress/en/stable/arguments.html#arguments
     def run(self):
+        self.flask_app = self.create_app()
         if self.funicorn_app is None:
             raise InitializationError(
                 'Cannot start HTTP service. Funicorn app is required when start http service!')
