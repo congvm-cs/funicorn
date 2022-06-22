@@ -9,7 +9,7 @@ itsdangerous==1.1.0
 Jinja2==2.11.2
 Markdown==3.2.1
 MarkupSafe==1.1.1
-numpy==1.18.4
+numpy==1.22.0
 opencv-python==4.2.0.34
 opt-einsum==3.2.1
 Pillow==7.1.2
